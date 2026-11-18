@@ -230,8 +230,9 @@ def subtitle_extract_handler(task_queue, progress_queue, video_path, raw_subtitl
     # 删除缓存
     if os.path.exists(raw_subtitle_path):
         os.remove(raw_subtitle_path)
-    # 创建一个OCR队列，大小建议值8-20
-    ocr_queue = queue.Queue(20)
+    # 创建一个OCR队列，容量由「DB 每批图片数」配置项决定（建议 8-20）
+    max_batch = getattr(options, 'MAX_BATCH_SIZE', 10) if hasattr(options, 'MAX_BATCH_SIZE') else 10
+    ocr_queue = queue.Queue(max(1, int(max_batch or 10)))
     # 创建一个OCR事件生产者线程
     ocr_event_producer_thread = Thread(target=ocr_task_producer,
                                        args=(ocr_queue, task_queue, progress_queue, video_path, raw_subtitle_path,),

@@ -1,18 +1,21 @@
-import os
-from backend.config import *
-import importlib
-from paddleocr import PaddleOCR
-from backend.tools.hardware_accelerator import HardwareAccelerator
-from backend.tools.paddle_model_config import PaddleModelConfig
+# -*- coding: utf-8 -*-
+"""OCR 门面：统一使用 ONNX Runtime 后端（CPU / DirectML）。
 
-# 加载文本检测+识别模型
+不再依赖 PaddleOCR / PaddlePaddle。后端、模型档位、DML 设备均由全局 config
+决定（GUI 可设置）；OCR 结果统一为 ``(dt_box, rec_res)`` 格式。
+"""
+from backend.config import config
+from backend.tools.hardware_accelerator import HardwareAccelerator
+from backend.tools.onnx_ocr import OnnxOcrRecogniser
+
+
 class OcrRecogniser:
+    """文本检测 + 识别门面，接口保持 ``predict(bgr_image) -> (dt_box, rec_res)``。"""
+
     def __init__(self):
         self.recogniser = None
-        # 使用单例，避免 new 出来的实例未初始化导致加速状态丢失
         self.hardware_accelerator = HardwareAccelerator.instance()
-        # 是否运行在 DirectML/ONNX 后端
-        self.use_dml = False
+        self.backend_used = None
 
     @staticmethod
     def y_round(y):
@@ -20,121 +23,85 @@ class OcrRecogniser:
         y_max = y - y % 10
         if abs(y - y_min) < abs(y - y_max):
             return y_min
-        else:
-            return y_max
+        return y_max
+
+    def _resolve_config(self):
+        """根据全局配置决定 provider、档位、设备。"""
+        backend = config.ocrBackend.value
+        # 总加速开关关闭时，无论选择何后端都强制 CPU
+        if not config.hardwareAcceleration.value:
+            backend = 'cpu'
+        if backend == 'dml':
+            providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+        elif backend == 'cpu':
+            providers = ['CPUExecutionProvider']
+        else:  # auto：有 DML 设备就用，否则 CPU
+            providers = (['DmlExecutionProvider', 'CPUExecutionProvider']
+                         if self.hardware_accelerator.has_dml()
+                         else ['CPUExecutionProvider'])
+        tier = config.modelTier.value
+        device_id = None
+        raw = config.dmlDeviceId.value
+        if raw is not None and str(raw).strip():
+            try:
+                device_id = int(str(raw).strip())
+            except (ValueError, TypeError):
+                device_id = None
+        return providers, tier, device_id
+
+    def init_model(self):
+        providers, tier, device_id = self._resolve_config()
+        recogniser = OnnxOcrRecogniser(
+            providers=providers,
+            model_tier=tier,
+            dml_device_id=device_id,
+            rec_batch_size=config.recBatchNumber.value,
+        )
+        self.backend_used = recogniser.active_provider
+        return recogniser
 
     def predict(self, image):
         if not self.recogniser:
             self.recogniser = self.init_model()
-
-        # DirectML/ONNX 后端走独立实现，输出 (dt_box, rec_res) 与下方逻辑互斥
-        if self.use_dml:
-            return self.recogniser.predict(image)
-
-        # PaddleOCR 3.x: 使用 predict_iter 获取结果
-        results = list(self.recogniser.predict_iter(image))
-        if not results:
+        dt_box, rec_res = self.recogniser.predict(image)
+        if not dt_box:
             return [], []
+        return self._sort_results(dt_box, rec_res)
 
-        res = results[0]
-        dt_polys = res.get('dt_polys', [])
-        rec_texts = res.get('rec_texts', [])
-        rec_scores = res.get('rec_scores', [])
+    def _sort_results(self, dt_box, rec_res):
+        """按「先 y 后 x」对检测结果排序，并将同一行的 y 对齐。
 
-        if len(dt_polys) == 0:
-            return [], []
-
-        # 将 dt_polys (numpy array, shape (N, points, 2)) 转换为旧的 dt_box 格式
-        # 旧格式: [[(x1,y1),(x2,y2),(x3,y3),(x4,y4)], ...]
-        dt_box = []
+        这是从旧 PaddleOCR 路径保留的行为，字幕后处理依赖稳定的阅读顺序。
+        """
         coordinate_list = []
-        for poly in dt_polys:
-            points = [(int(p[0]), int(p[1])) for p in poly]
-            # 取 AABB 用于排序
-            xs = [p[0] for p in points]
-            ys = [p[1] for p in points]
-            xmin, xmax = min(xs), max(xs)
-            ymin, ymax = min(ys), max(ys)
-            coordinate_list.append([xmin, xmax, ymin, ymax])
-            dt_box.append(points)
+        for box in dt_box:
+            xs = [p[0] for p in box]
+            ys = [p[1] for p in box]
+            coordinate_list.append([min(xs), max(xs), min(ys), max(ys)])
 
-        # 将 rec_texts + rec_scores 转换为旧的 rec_res 格式
-        rec_res = [(text, float(score)) for text, score in zip(rec_texts, rec_scores)]
-
-        # 计算有多少行字幕，将每行字幕最小的ymin值放入lines
         lines = []
-        for i in coordinate_list:
-            rounded_y = self.y_round(i[2])
-            if not any(abs(rounded_y - line_y) <= 10 for line_y in lines):
-                lines.append(rounded_y)
+        for coord in coordinate_list:
+            rounded = self.y_round(coord[2])
+            if not any(abs(rounded - line_y) <= 10 for line_y in lines):
+                lines.append(rounded)
         lines = sorted(lines)
+        for coord in coordinate_list:
+            for line_y in lines:
+                if abs(line_y - self.y_round(coord[2])) <= 10:
+                    coord[2] = line_y
 
-        for i in coordinate_list:
-            for j in lines:
-                if abs(j - self.y_round(i[2])) <= 10:
-                    i[2] = j
-
-        to_rank_res = list(zip(coordinate_list, rec_res, dt_box))
-        # 用sorted替代冒泡排序：先按ymin，再按xmin
-        ranked_res = sorted(to_rank_res, key=lambda x: (x[0][2], x[0][0]))
-        # 重建 dt_box 和 rec_res（排序后）
-        sorted_dt_box = []
-        sorted_rec_res = []
-        for coord, rec, box in ranked_res:
-            # 将 coordinate 转换回 4 点格式
+        ranked = sorted(zip(coordinate_list, rec_res), key=lambda x: (x[0][2], x[0][0]))
+        sorted_boxes, sorted_rec = [], []
+        for coord, rec in ranked:
             xmin, xmax, ymin, ymax = coord
-            sorted_dt_box.append([(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)])
-            sorted_rec_res.append(rec)
-
-        return sorted_dt_box, sorted_rec_res
-
-    def init_model(self):
-        model_config = PaddleModelConfig(self.hardware_accelerator)
-
-        # PaddleOCR 只支持 gpu:0/cpu，无法使用 DirectML。
-        # 当检测到 ONNX 加速 provider（如 DmlExecutionProvider）且无 CUDA 时，
-        # 切换到自研的 ONNX Runtime 后端，真正走 DirectML 推理；失败则回退 CPU。
-        if (not self.hardware_accelerator.has_cuda()
-                and self.hardware_accelerator.onnx_providers):
-            try:
-                from backend.tools.dml_ocr import DmlOcrRecogniser
-                recogniser = DmlOcrRecogniser()
-                self.use_dml = True
-                return recogniser
-            except Exception as e:
-                print(f"[DirectML] 初始化失败，回退 PaddlePaddle/CPU: {e}")
-                self.use_dml = False
-
-        # PaddleOCR 3.x 使用 device 参数替代 use_gpu
-        if self.hardware_accelerator.has_cuda():
-            device = 'gpu:0'
-        else:
-            device = 'cpu'
-
-        kwargs = dict(
-            text_detection_model_dir=model_config.DET_MODEL_PATH,
-            text_recognition_model_dir=model_config.REC_MODEL_PATH,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            text_rec_score_thresh=0,
-            device=device,
-        )
-        if model_config.DET_MODEL_NAME:
-            kwargs['text_detection_model_name'] = model_config.DET_MODEL_NAME
-        if model_config.REC_MODEL_NAME:
-            kwargs['text_recognition_model_name'] = model_config.REC_MODEL_NAME
-
-        return PaddleOCR(**kwargs)
+            sorted_boxes.append([(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)])
+            sorted_rec.append(rec)
+        return sorted_boxes, sorted_rec
 
 
 def get_coordinates(dt_box):
-    """
-    从返回的检测框中获取坐标
-    :param dt_box 检测框返回结果
-    :return list 坐标点列表
-    """
-    coordinate_list = list()
+    """从返回的检测框中获取 (xmin, xmax, ymin, ymax) 坐标列表。"""
+    coordinate_list = []
     if isinstance(dt_box, list):
         for i in dt_box:
             i = list(i)

@@ -86,6 +86,12 @@ class Config(QConfig):
     deleteEmptyTimeStamp = ConfigItem("Main", "DeleteEmptyTimeStamp", True, BoolValidator())
     # 是否重新分词, 用于解决没有语句没有空格
     wordSegmentation = ConfigItem("Main", "WordSegmentation", True, BoolValidator())
+    # OCR 执行后端：auto=自动(DML优先) / cpu / dml
+    ocrBackend = OptionsConfigItem("Main", "OcrBackend", "auto", OptionsValidator(["auto", "cpu", "dml"]))
+    # OCR 模型档位：light=轻量(tiny rec) / precise=精准(small rec)
+    modelTier = OptionsConfigItem("Main", "ModelTier", "precise", OptionsValidator(["light", "precise"]))
+    # 指定 DML 设备索引（留空自动选择；可用值为 0,1,...）
+    dmlDeviceId = ConfigItem("Main", "DmlDeviceId", "")
     # 是否使用硬件加速
     hardwareAcceleration = ConfigItem("Main", "HardwareAcceleration", HARDWARD_ACCELERATION_OPTION, BoolValidator())
     # 启动时检查应用更新

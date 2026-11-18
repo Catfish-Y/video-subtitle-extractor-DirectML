@@ -28,7 +28,6 @@ from backend.tools.hardware_accelerator import HardwareAccelerator
 from backend.tools import reformat
 from backend.tools.ocr import OcrRecogniser, get_coordinates
 from backend.tools import subtitle_ocr
-from backend.tools.paddle_model_config import PaddleModelConfig
 from backend.tools.process_manager import ProcessManager
 from backend.tools.subtitle_detect import SubtitleDetect
 from backend.bean.subtitle_area import SubtitleArea
@@ -51,7 +50,6 @@ class SubtitleExtractor:
         self.hardware_accelerator = HardwareAccelerator.instance()
         # 是否使用硬件加速
         self.hardware_accelerator.set_enabled(config.hardwareAcceleration.value)
-        self.model_config = PaddleModelConfig(self.hardware_accelerator)
         # 创建字幕检测对象
         self.sub_detector = SubtitleDetect()
         # 视频路径
@@ -122,7 +120,7 @@ class SubtitleExtractor:
             self.append_output(f"  {tr['Main']['FrameCount']}：{self.frame_count}"
                   f"  |  {tr['Main']['FrameRate']}：{self.fps}")
             # 打印加载模型信息
-            self.append_output(f"  DET: {os.path.basename(self.model_config.DET_MODEL_PATH)}  |  REC: {os.path.basename(self.model_config.REC_MODEL_PATH)}")
+            self.append_output(f"  OCR 后端: {config.ocrBackend.value}  |  模型档位: {config.modelTier.value} (PP-OCRv6 ONNX)")
             self.append_output('-----------------------------')
             # 打印视频帧提取开始提示
             self.append_output(tr['Main']['StartProcessFrame'])
@@ -137,15 +135,12 @@ class SubtitleExtractor:
             # 创建一个字幕OCR识别进程
             subtitle_ocr_process = self.start_subtitle_ocr_async()
             if self.sub_area is not None:
-                if platform.system() in ['Windows', 'Linux', 'Darwin']:
-                    # accurate 模式始终使用 VSE 自研逐帧检测（README 标注「非常慢」）；
-                    # fast / auto 使用 VideoSubFinder。与 README 的模式说明保持一致。
-                    if config.mode.value == 'accurate':
-                        self.extract_frame_by_det()
-                    else:
-                        self.extract_frame_by_vsf()
+                # accurate 模式始终使用 VSE 自研逐帧检测（/README 标注「非常慢」）；
+                # fast / auto 使用 VideoSubFinder。
+                if config.mode.value == 'accurate':
+                    self.extract_frame_by_det()
                 else:
-                    self.extract_frame_by_fps()
+                    self.extract_frame_by_vsf()
             else:
                 self.extract_frame_by_fps()
 
@@ -434,90 +429,35 @@ class SubtitleExtractor:
                 except FileNotFoundError:
                     return
 
-        def vsf_output(out, ):
-            duration_ms = (self.frame_count / self.fps) * 1000
-            last_total_ms = 0
-            for line in iter(out.readline, b''):
-                line = line.decode("utf-8")
-                # self.append_output('line', line, type(line), line.startswith('Frame: '))
-                if line.startswith('Frame: '):
-                    line = line.replace("\n", "")
-                    line = line.replace("Frame: ", "")
-                    h, m, s, ms = line.split('__')[0].split('_')
-                    total_ms = int(ms) + int(s) * 1000 + int(m) * 60 * 1000 + int(h) * 60 * 60 * 1000
-                    if total_ms > last_total_ms:
-                        frame_no = int(total_ms / self.fps)
-                        task = (self.frame_count, frame_no, None, None, total_ms, config.subtitleArea.value)
-                        self.subtitle_ocr_task_queue.put(task)
-                    last_total_ms = total_ms
-                    if total_ms / duration_ms >= 1:
-                        self.update_progress(frame_extract=100)
-                        return
-                    else:
-                        self.update_progress(frame_extract=(total_ms / duration_ms) * 100)
-                else:
-                    self.append_output(line.strip())
-            out.close()
-
-        # 定义videoSubFinder所在路径
-        if platform.system() == 'Windows':
-            path_vsf = os.path.join(BASE_DIR, 'subfinder', 'windows', 'VideoSubFinderWXW.exe')
-        elif platform.system() == 'Darwin':
-            path_vsf = os.path.join(BASE_DIR, 'subfinder', 'macos', 'VideoSubFinderCli')
-            os.chmod(path_vsf, 0o775)
-        else:
-            path_vsf = os.path.join(BASE_DIR, 'subfinder', 'linux', 'VideoSubFinderCli.run')
-            os.chmod(path_vsf, 0o775)
-        # ：图像上半部分所占百分比，取值【0-1】
+        # 仅支持 Windows：VideoSubFinder 可执行文件随仓库分发
+        path_vsf = os.path.join(BASE_DIR, 'subfinder', 'windows', 'VideoSubFinderWXW.exe')
+        if not os.path.exists(path_vsf):
+            raise FileNotFoundError(f'未找到 VideoSubFinder: {path_vsf}')
+        # 字幕区域由像素坐标换算为 VSF 所需的百分比参数
         top_end = 1 - self.sub_area.ymin / self.frame_height
-        # bottom_end：图像下半部分所占百分比，取值【0-1】
         bottom_end = 1 - self.sub_area.ymax / self.frame_height
-        # left_end：图像左半部分所占百分比，取值【0-1】
         left_end = self.sub_area.xmin / self.frame_width
-        # re：图像右半部分所占百分比，取值【0-1】
         right_end = self.sub_area.xmax / self.frame_width
-        if (not self.hardware_accelerator.has_cuda()) and len(self.hardware_accelerator.onnx_providers) > 0:
-            cpu_count = multiprocessing.cpu_count()
-        else:
-            # 留2核心来给其他任务使用
-            cpu_count = max(multiprocessing.cpu_count() - 2, 1)
+        # 线程数：默认留 2 核给其他任务，可由配置项覆盖
+        cpu_count = max(multiprocessing.cpu_count() - 2, 1)
         if config.videoSubFinderCpuCores.value > 0:
             cpu_count = config.videoSubFinderCpuCores.value
-        if platform.system() == 'Windows':
-            # 定义执行命令
-            cmd = f"{path_vsf} --use_cuda -c -r -i \"{self.video_path}\" -o \"{self.temp_output_dir}\" -ces \"{self.vsf_subtitle}\" "
-            cmd += f"-te {top_end} -be {bottom_end} -le {left_end} -re {right_end} -nthr {cpu_count} -nocrthr {cpu_count} "
-            cmd += f"--open_video_{config.videoSubFinderDecoder.value.value.lower()} "
-            # 计算进度
-            try:
-                self.vsf_running = True
-                Thread(target=count_process, daemon=True).start()       
-                # 已知BUG: test_chinese_cht.flv在net drive上会导致无法停止, 但在本地不会, 可能是vsf的原因
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1,
-                                    close_fds='posix' in sys.builtin_module_names, shell=False, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-                ProcessManager.instance().add_process(p)
-                self.manage_process(p.pid)
-                p.wait()
-            finally:
-                self.vsf_running = False
-        else:
-            # 定义执行命令
-            cmd = f"{path_vsf} -c -r -i \"{self.video_path}\" -o \"{self.temp_output_dir}\" -ces \"{self.vsf_subtitle}\" "
-            if self.hardware_accelerator.has_accelerator():
-                cmd += "--use_cuda "
-            cmd += f"-te {top_end} -be {bottom_end} -le {left_end} -re {right_end} -nthr {cpu_count} -dsi "
-            cmd += f"--open_video_{config.videoSubFinderDecoder.value.value.lower()} "
+        cmd = (f'"{path_vsf}" -c -r -i "{self.video_path}" '
+               f'-o "{self.temp_output_dir}" -ces "{self.vsf_subtitle}" '
+               f'-te {top_end} -be {bottom_end} -le {left_end} -re {right_end} '
+               f'-nthr {cpu_count} -nocrthr {cpu_count} '
+               f'--open_video_{config.videoSubFinderDecoder.value.value.lower()}')
+        try:
             self.vsf_running = True
-            try:
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1,
-                                    close_fds='posix' in sys.builtin_module_names, shell=True,
-                                    start_new_session=True)
-                Thread(target=vsf_output, daemon=True, args=(p.stderr,)).start()
-                ProcessManager.instance().add_process(p)
-                self.manage_process(p.pid)
-                p.wait()
-            finally:
-                self.vsf_running = False
+            Thread(target=count_process, daemon=True).start()
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 bufsize=1, shell=False,
+                                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+            ProcessManager.instance().add_process(p)
+            self.manage_process(p.pid)
+            p.wait()
+        finally:
+            self.vsf_running = False
     def filter_watermark(self):
         """
         去除原始字幕文本中的水印区域的文本
@@ -1041,6 +981,8 @@ class SubtitleExtractor:
             'SUB_AREA_DEVIATION_RATE': config.subtitleAreaDeviationRate.value / 100.0,
             'DEBUG_OCR_LOSS': config.debugOcrLoss.value,
             'HARDWARD_ACCELERATOR': self.hardware_accelerator,
+            # 帧预取队列容量（DB 每批图片数），供 OCR 生产者/消费者使用
+            'MAX_BATCH_SIZE': config.maxBatchSize.value,
         }
         process, task_queue, progress_queue = subtitle_ocr.async_start(self.video_path, self.raw_subtitle_path, self.sub_area, options)
         ProcessManager.instance().add_process(process)

@@ -1,7 +1,8 @@
 # DirectML 后端依赖（Windows AMD/Intel/NVIDIA GPU 通用加速）
-# 使用官方 PP-OCRv5 ONNX 模型 + onnxruntime DirectML，无需 paddle2onnx 转换。
+# 先卸载 CPU 版 onnxruntime，再安装本文件（两者不能共存）：
+#   pip uninstall -y onnxruntime
+#   pip install -r requirements_directml.txt
 # onnxruntime-directml 1.24+ 提供 Python 3.13 wheel，1.20.1 在 3.13 上会尝试
-# 从源码编译 onnx 而失败，故固定到 1.24.4。
+# 从源码编译 onnx 而失败，故要求 >=1.24.4。
 onnxruntime-directml>=1.24.4
 onnx>=1.18.0
-PyYAML>=6.0

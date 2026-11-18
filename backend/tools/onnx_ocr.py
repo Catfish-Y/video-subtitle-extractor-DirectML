@@ -3,8 +3,13 @@
 
 PaddleOCR 3.x 本身只支持 PaddlePaddle 的 ``gpu:0`` / ``cpu`` device，无法使用
 Windows 的 DirectML 加速。本模块绕开 PaddlePaddle 推理，直接用官方发布的
-PP-OCRv5 ONNX 模型 + onnxruntime 的 ``DmlExecutionProvider`` 完成检测与识别，
+PP-OCRv6 ONNX 模型 + onnxruntime 的 ``DmlExecutionProvider`` 完成检测与识别，
 并提供与 :class:`backend.tools.ocr.OcrRecogniser` 完全一致的 ``predict`` 接口。
+
+模型档位（与抽帧模式 mode 正交）：
+- ``light``（轻量）：det ``PP-OCRv6_small_det`` + rec ``PP-OCRv6_tiny_rec``，速度快。
+- ``precise``（精准）：det ``PP-OCRv6_small_det`` + rec ``PP-OCRv6_small_rec``，识别更准。
+v6 的检测模型只有 small 档提供 ONNX，故两档共用同一 det，差异在 rec。
 
 设计要点：
 - 前后处理（DBNet 检测后处理、CTC 解码）内联实现，不依赖 paddlex 私有 API，
@@ -35,8 +40,20 @@ _MODEL_BASE = (
     'https://paddle-model-ecology.bj.bcebos.com/'
     'paddlex/official_inference_model/paddle3.0.0'
 )
-_DET_MODEL_DIR = 'PP-OCRv5_mobile_det_onnx'
-_REC_MODEL_DIR = 'PP-OCRv5_mobile_rec_onnx'
+MODEL_TIERS = ('light', 'precise')
+# v6 检测模型仅 small 档提供 ONNX，两个档位共用
+_DET_MODEL_DIR = 'PP-OCRv6_small_det_onnx'
+_REC_MODEL_DIRS = {
+    'light': 'PP-OCRv6_tiny_rec_onnx',
+    'precise': 'PP-OCRv6_small_rec_onnx',
+}
+
+# 官方源名称 -> 用途说明，供 GUI 提示用户下载
+MODEL_INFO = {
+    _DET_MODEL_DIR: '文本检测模型（两个档位共用）',
+    'PP-OCRv6_tiny_rec_onnx': '轻量档文本识别模型',
+    'PP-OCRv6_small_rec_onnx': '精准档文本识别模型',
+}
 
 # 检测参数（与官方 inference.yml 的 PostProcess 保持一致）
 _DET_THRESH = 0.3
@@ -55,6 +72,51 @@ def _default_cache_dir():
     if override:
         return Path(override).expanduser()
     return Path.home() / '.paddleocr' / 'onnx'
+
+
+def model_download_url(model_dir_name):
+    """返回某个模型的官方下载 URL（供 GUI 提示用户手动下载）。"""
+    return f'{_MODEL_BASE}/{model_dir_name}.tar'
+
+
+def check_models(model_tier='precise', cache_dir=None):
+    """检查指定档位所需模型是否齐全。
+
+    返回 ``(missing, directory)``：missing 为缺失的模型目录名列表，
+    directory 为模型应放置的目录（绝对路径字符串）。
+    """
+    cache = Path(cache_dir).expanduser() if cache_dir else _default_cache_dir()
+    required = [_DET_MODEL_DIR, _REC_MODEL_DIRS.get(model_tier, _REC_MODEL_DIRS['precise'])]
+    missing = [name for name in required if not (cache / name / 'inference.onnx').exists()]
+    return missing, str(cache)
+
+
+def list_dml_devices():
+    """枚举可用的 DML 设备，返回 [{'index': int, 'name': str, 'vendor_id': int, 'device_id': int}]。
+
+    设备顺序即 onnxruntime 的 device_id 索引。GPU 厂商根据 vendor_id 推断名称。
+    无 onnxruntime 或枚举失败时返回空列表。
+    """
+    try:
+        import onnxruntime as ort
+        devices = []
+        index = 0
+        vendor_names = {4318: 'NVIDIA', 32902: 'Intel', 4098: 'AMD', 5140: 'Qualcomm'}
+        for ep in ort.get_ep_devices():
+            if 'Dml' not in ep.ep_name:
+                continue
+            hw = ep.device
+            vendor = vendor_names.get(hw.vendor_id, f'Vendor({hw.vendor_id})')
+            devices.append({
+                'index': index,
+                'name': f'{vendor} GPU #{index} (id={hw.device_id})',
+                'vendor_id': hw.vendor_id,
+                'device_id': hw.device_id,
+            })
+            index += 1
+        return devices
+    except Exception:
+        return []
 
 
 def _download_model(model_dir_name, cache_dir):
@@ -231,7 +293,7 @@ class _CTCDecode:
         return ''.join(chars), float(np.mean(confidences))
 
 
-class DmlOcrRecogniser:
+class OnnxOcrRecogniser:
     """基于 ONNX Runtime DirectML 的字幕 OCR 识别器。
 
     接口与 :class:`backend.tools.ocr.OcrRecogniser` 一致：
@@ -239,35 +301,58 @@ class DmlOcrRecogniser:
 
     :param providers: onnxruntime provider 列表；默认优先 DML，CPU 兜底。
     :param model_dir: 可选，自定义 ONNX 模型根目录（含两个模型子目录）。
+    :param model_tier: ``light`` 或 ``precise``，决定使用 tiny/small 识别模型。
+    :param dml_device_id: 可选，DML 设备索引（见 :func:`list_dml_devices`），
+        ``None`` 表示由 onnxruntime 自动选择。
+    :param rec_batch_size: 识别阶段每批处理的文本框数量（来自配置项）。
+    :param det_only: 仅加载检测模型（供精准模式做逐帧文本框检测用）。
     """
 
-    def __init__(self, providers=None, model_dir=None):
+    def __init__(self, providers=None, model_dir=None, model_tier='precise',
+                 dml_device_id=None, rec_batch_size=6, det_only=False):
         import onnxruntime as ort
 
         self._ort = ort
+        self.det_only = det_only
+        self.rec_batch_size = max(1, int(rec_batch_size or 6))
+        if model_tier not in MODEL_TIERS:
+            model_tier = 'precise'
+        self.model_tier = model_tier
         available = ort.get_available_providers()
         if providers is None:
             providers = [p for p in ('DmlExecutionProvider', 'CPUExecutionProvider')
                          if p in available]
             if not providers:
                 providers = ['CPUExecutionProvider']
-        self.providers = providers
-        if 'DmlExecutionProvider' not in providers:
-            raise RuntimeError('[DirectML] 当前环境无 DmlExecutionProvider，无法启用 DirectML 后端')
+        if ('DmlExecutionProvider' not in providers
+                and 'CPUExecutionProvider' not in providers):
+            raise RuntimeError('[ONNX] 无可用执行提供程序（DML / CPU）')
+
+        # 将 provider 列表转为可带选项的格式，用于指定 DML 设备
+        formatted = []
+        for p in providers:
+            if p == 'DmlExecutionProvider' and dml_device_id is not None:
+                formatted.append((p, {'device_id': str(dml_device_id)}))
+            else:
+                formatted.append(p)
+        self.providers = formatted
 
         self.cache_dir = Path(model_dir).expanduser() if model_dir else _default_cache_dir()
         self.det_path = _download_model(_DET_MODEL_DIR, self.cache_dir)
-        self.rec_path = _download_model(_REC_MODEL_DIR, self.cache_dir)
-        self.char_list = _read_char_dict(_REC_MODEL_DIR, self.cache_dir)
 
         session_options = ort.SessionOptions()
         self.det_session = ort.InferenceSession(
-            str(self.det_path), sess_options=session_options, providers=providers)
-        self.rec_session = ort.InferenceSession(
-            str(self.rec_path), sess_options=session_options, providers=providers)
+            str(self.det_path), sess_options=session_options, providers=formatted)
         self.det_post = _DBPostProcess()
-        self.rec_decode = _CTCDecode(self.char_list)
         self.active_provider = self.det_session.get_providers()[0]
+
+        if not det_only:
+            rec_model_dir = _REC_MODEL_DIRS[model_tier]
+            self.rec_path = _download_model(rec_model_dir, self.cache_dir)
+            self.char_list = _read_char_dict(rec_model_dir, self.cache_dir)
+            self.rec_session = ort.InferenceSession(
+                str(self.rec_path), sess_options=session_options, providers=formatted)
+            self.rec_decode = _CTCDecode(self.char_list)
 
     def _det_predict(self, image):
         """检测文本框，返回 [(x1,y1,x2,y2), ...] 的 AABB 列表。"""
@@ -297,23 +382,38 @@ class DmlOcrRecogniser:
         boxes, scores = self.det_post(pred, src_h, src_w, ratio_h, ratio_w)
         return boxes, scores
 
-    def _rec_predict(self, image, box):
-        """识别单个文本框，返回 (text, confidence)。"""
+    def _prepare_rec_image(self, image, box):
+        """把一个检测框预处理为识别模型的输入张量 (C, H, W)。"""
         crop = self._CropRotate(image, box)
         c, img_h, img_w = _REC_IMAGE_SHAPE
         max_ratio = img_w / img_h
         h, w = crop.shape[:2]
         max_ratio = max(max_ratio, w / float(h))
-        target_w = int(img_h * max_ratio)
-        target_w = min(target_w, 3200)
+        target_w = min(int(img_h * max_ratio), 3200)
         resized_w = min(target_w, int(math.ceil(img_h * w / float(h))))
         resized = cv2.resize(crop, (resized_w, img_h)).astype(np.float32)
         resized = resized.transpose((2, 0, 1)) / 255.0
         resized = (resized - 0.5) / 0.5
         padding = np.zeros((c, img_h, target_w), dtype=np.float32)
         padding[:, :, :resized_w] = resized
-        outputs = self.rec_session.run(None, {'x': np.ascontiguousarray(padding[None, ...])})
-        return self.rec_decode(outputs[0][0])
+        return padding
+
+    def _rec_predict_batch(self, tensors):
+        """批量识别，返回 [(text, confidence), ...]，顺序与输入一致。"""
+        results = []
+        batch = max(1, self.rec_batch_size)
+        for start in range(0, len(tensors), batch):
+            chunk = tensors[start:start + batch]
+            # 同批内按宽度补到一致，模型输入最后一维动态
+            max_w = max(t.shape[2] for t in chunk)
+            padded = np.zeros((len(chunk), chunk[0].shape[0],
+                               chunk[0].shape[1], max_w), dtype=np.float32)
+            for i, t in enumerate(chunk):
+                padded[i, :, :, :t.shape[2]] = t
+            outputs = self.rec_session.run(None, {'x': np.ascontiguousarray(padded)})
+            for probs in outputs[0]:
+                results.append(self.rec_decode(probs))
+        return results
 
     @staticmethod
     def _CropRotate(img, box):
@@ -335,6 +435,11 @@ class DmlOcrRecogniser:
         matrix = cv2.getPerspectiveTransform(src, dst)
         return cv2.warpPerspective(img, matrix, (width, height))
 
+    def detect(self, image):
+        """仅做文本检测，返回检测框列表（4 点坐标的数组）。"""
+        boxes, _ = self._det_predict(image)
+        return [np.array(b, dtype=np.int32) for b in boxes]
+
     def predict(self, image):
         """与 OcrRecogniser.predict 兼容：返回 (dt_box, rec_res)。
 
@@ -344,9 +449,11 @@ class DmlOcrRecogniser:
         boxes, _ = self._det_predict(image)
         if not boxes:
             return [], []
+        # 预处理所有框后按配置批大小批量识别，避免逐框推理的开销
+        tensors = [self._prepare_rec_image(image, box) for box in boxes]
+        texts = self._rec_predict_batch(tensors)
         dt_box, rec_res = [], []
-        for box in boxes:
-            text, score = self._rec_predict(image, box)
+        for box, (text, score) in zip(boxes, texts):
             if not text:
                 continue
             dt_box.append([(int(p[0]), int(p[1])) for p in box])
