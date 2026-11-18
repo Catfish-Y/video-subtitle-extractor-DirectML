@@ -956,28 +956,31 @@ flowchart TD
 ### backend/tools/makedist.py
 
 - **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/makedist.py`
-- **规模**：34 行
-- **职责**：QPT 打包脚本，基于 `requirements.txt` 生成绿色版运行目录。仅 CPU / DirectML 一种变体，无 CUDA 参数与 CUDA 依赖包。
-- **关键类/函数**：
+- **职责**：QPT 打包脚本，基于 `requirements.txt` 生成绿色版运行目录。仅 CPU / DirectML 一种变体，无 CUDA 参数与 CUDA 依赖包；`module.make()` 后执行 `_post_process()` 做运行库刷新、体积裁剪与依赖完整性校验。
+- **关键常量/函数**：
 
-| 名称 | 行号 | 说明 |
-|------|------|------|
-| `main` | 12-30 | 计算路径、按环境变量切换 pip 源、构造 `CEM` 并执行 `make()` |
-| `__main__` 入口块 | 33-34 | 直接调用 `main()` |
+| 名称 | 说明 |
+|------|------|
+| `_UNUSED_ASSETS` / `_UNUSED_VSF_FILES` | 仅供展示的演示素材、VideoSubFinder 的 Intel oneAPI/CUDA 变体，运行时不加载，打包后剔除（`vse.ico` 保留作窗口图标）。 |
+| `_CRT_DLLS` | onnxruntime-directml 所需的较新 MSVC 运行库，构建时从 System32 覆盖 QPT 内置的旧版 DLL。 |
+| `_REQUIRED_WHEEL_PREFIXES` | 关键依赖在 `opt/packages` 中 wheel 名的前缀，用于构建阶段的完整性校验。 |
+| `_post_process(save_path)` | 对 Release/Debug 逐个：刷新 CRT、裁剪素材与 VSF 变体、校验关键 wheel 已下载。 |
+| `main` | 计算路径、按环境变量切换 pip 源、构造 `CEM` 执行 `make()`，再调用 `_post_process()`。 |
 
 - **调用关系**：
-  - 导入 QPT 的 `CreateExecutableModule as CEM`、`set_default_pip_source`、`PYPI_PIP_SOURCE`（7-9）。
+  - 导入 QPT 的 `CreateExecutableModule as CEM`、`set_default_pip_source`、`PYPI_PIP_SOURCE`。
   - `CEM` 以 `gui.py` 为启动器、`requirements.txt` 为依赖清单，产出目录在 `SAVE_PATH`。
 
 - **实现细节**：
-  - `WORK_DIR` 为文件向上三级（13 行，即项目根）；`LAUNCH_PATH=gui.py`（14）；`SAVE_PATH` 为项目根同级的 `vse_out`（15）；`ICON_PATH=design/vse.ico`（16）。
-  - 环境变量 `QPT_Action == "True"` 时调用 `set_default_pip_source(PYPI_PIP_SOURCE)`（18-19）。
-  - `CEM` 参数：`hidden_terminal=False`、`sub_modules=[]`（21-29）。
+  - `WORK_DIR` 为文件向上三级（项目根）；`LAUNCH_PATH=gui.py`；`SAVE_PATH` 为项目根同级的 `vse_out`；`ICON_PATH=design/vse.ico`。
+  - 环境变量 `QPT_Action == "True"` 时调用 `set_default_pip_source(PYPI_PIP_SOURCE)`。
+  - `CEM` 参数：`hidden_terminal=False`、`sub_modules=[]`。
 
-- **维护注意点**：
-  - 脚本无命令行参数解析，不接收 `--cuda` 之类开关；OCR 统一走 onnxruntime，CPU 版与 DML 版 `onnxruntime` 包二选一，由 `requirements.txt` 决定，打包前确认依赖文件版本正确。
-  - `WORK_DIR` 依赖固定的三级目录结构，移动脚本位置需重新核对。
-  - `sub_modules=[]` 为空，后续若需拆分模块需在 `CEM` 配置处扩展。
+- **维护注意点（重要）**：
+  - **绝不能给 `CEM` 传 `ignore_dirs` 参数**：QPT 1.0b8 仅在 `ignore_dirs is None` 时初始化 `self.ignore_dirs`，一旦外部传入，`executor.py` 内部的 `.append()` 会抛 `AttributeError: 'CreateExecutableModule' object has no attribute 'ignore_dirs'`，导致打包在第一阶段即失败（2026-11-19 workflow 报错根因）。不传时 QPT 会自行初始化并自动忽略 `.github`/`.git`/`.idea`/`__pycache__`/虚拟环境等目录。`.workbuddy` 已从 Git 历史与远端清除，CI 干净 checkout 不含它，无需额外排除。
+  - **依赖校验必须针对 `opt/packages` 的 wheel 缓存，而非 site-packages**：QPT 默认 `DISPLAY_LOCAL_INSTALL` 模式在构建阶段只把 wheel 下载到 `opt/packages`，真正的安装发生在目标机首次启动时，构建阶段的 site-packages 是（部分）空的。`opt/packages` 的 wheel 缓存绝不能删除，首次启动部署依赖它。
+  - 脚本无命令行参数解析，不接收 `--cuda` 之类开关；OCR 统一走 onnxruntime，由 `requirements.txt` 决定依赖，打包前确认版本正确。
+  - `WORK_DIR` 依赖固定的三级目录结构，移动脚本位置需重新核对；`sub_modules=[]` 为空，后续拆分模块需在 `CEM` 配置处扩展。
 
 ---
 
@@ -2460,7 +2463,7 @@ flowchart TD
 | 环节 | 文件 | 说明 |
 |---|---|---|
 | 依赖清单 | `requirements.txt` | 全部 `==` 锁版本 + 显式传递依赖；PySide6 只列 `Essentials`+`shiboken6`（不引 WebEngine/Pdf/Addons）；移除未引用的 `onnx` / `scikit-image` / `lmdb`；OpenCV 换成 headless 版。 |
-| 构建脚本 | `backend/tools/makedist.py` | QPT 打包后执行 `_post_process()`：①用 System32 的新版 VC++ 运行库覆盖 QPT 内置旧 DLL（旧版会导致 onnxruntime "DLL 初始化例程失败"）；②剔除演示素材与 VideoSubFinder 的 Intel oneAPI 变体；③校验关键包已落盘。**`opt/packages` 的 wheel 缓存不能删**——首次启动部署依赖它。 |
+| 构建脚本 | `backend/tools/makedist.py` | QPT 打包后执行 `_post_process()`：①用 System32 的新版 VC++ 运行库覆盖 QPT 内置旧 DLL（旧版会导致 onnxruntime "DLL 初始化例程失败"）；②剔除演示素材与 VideoSubFinder 的 Intel oneAPI 变体；③校验关键依赖的 wheel 已下载到 `opt/packages`（构建阶段 site-packages 尚未填充，不能作为校验依据）。**`opt/packages` 的 wheel 缓存不能删**——首次启动部署依赖它。**不要给 `CEM` 传 `ignore_dirs`**，否则触发 QPT 1.0b8 的 `self.ignore_dirs` 未初始化缺陷，打包立即失败。 |
 | 发布门禁 | `.github/workflows/build-windows.yml` | 生成 Release 后、上传前，用打包目录内的 `Python/python.exe` 运行 `backend/tools/release_smoke_test.py`，逐一 import 全部运行时依赖并确认 `DmlExecutionProvider` 可用；失败即中止 workflow，杜绝再次发布启动即崩溃的包。 |
 
 ### 仍建议后续推进

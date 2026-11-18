@@ -53,19 +53,27 @@ _CRT_DLLS = (
     "concrt140.dll",
 )
 
-# 这些包必须在 site-packages 中，否则启动必然失败
-_REQUIRED_PACKAGES = (
-    "shiboken6",
-    "PySide6",
-    "qfluentwidgets",
-    "qframelesswindow",
-    "onnxruntime",
-    "cv2",
-    "numpy",
-    "yaml",
-    "rapidfuzz",
-    "urllib3",
+# 关键依赖 -> 其在 opt/packages 中 wheel 文件名的前缀（QPT 默认 DISPLAY_LOCAL_INSTALL
+# 模式在构建阶段只把 wheel 下载到 opt/packages，真正的安装发生在目标机首次启动时）。
+# 因此构建阶段的完整性校验必须针对 wheel 缓存，而不是尚未填充的 site-packages。
+# 前缀用小写，匹配时统一转小写；名称含 - 和 _ 的归一化差异由 normalize() 处理。
+_REQUIRED_WHEEL_PREFIXES = (
+    "shiboken6-",                    # shiboken6
+    "pyside6_essentials-",           # PySide6 运行时二进制（不再用 6.12 元包空壳）
+    "pyside6_fluent_widgets-",       # qfluentwidgets
+    "pysidesix_frameless_window-",   # qframelesswindow
+    "onnxruntime_directml-",         # onnxruntime
+    "opencv_python_headless-",       # cv2
+    "numpy-",
+    "pyyaml-",                       # yaml
+    "rapidfuzz-",
+    "urllib3-",
 )
+
+
+def _normalize(name):
+    """wheel 文件名归一化：小写、把 - 和 . 统一成 _（版本分隔部分除外）。"""
+    return name.lower().replace("-", "_")
 
 
 def _remove(path):
@@ -98,15 +106,19 @@ def _post_process(save_path):
         for name in _UNUSED_VSF_FILES:
             _remove(os.path.join(vsf_dir, name))
 
-        # 4) 校验关键依赖确实落盘，缺失时立即失败，避免再次发布启动即崩溃的包。
-        #    注意：QPT 的首次启动部署仍依赖 opt/packages 中的 wheel，不可删除缓存。
-        site_packages = os.path.join(python_dir, "Lib", "site-packages")
-        installed = [p for p in _REQUIRED_PACKAGES
-                     if os.path.exists(os.path.join(site_packages, p))]
-        if len(installed) != len(_REQUIRED_PACKAGES):
-            missing = set(_REQUIRED_PACKAGES) - set(installed)
+        # 4) 校验关键依赖的 wheel 确实下载到 opt/packages，缺失时立即失败。
+        #    QPT 在目标机首次启动时才把 wheel 安装进 site-packages，因此构建阶段
+        #    的 site-packages 是（部分）空的，不能作为校验依据。
+        #    opt/packages 的 wheel 缓存绝不能删除——首次启动部署依赖它。
+        packages_dir = os.path.join(module_dir, "opt", "packages")
+        if not os.path.isdir(packages_dir):
+            raise RuntimeError(f"[{variant}] 缺少 opt/packages 目录，QPT 未正确下载依赖")
+        wheels = [_normalize(f) for f in os.listdir(packages_dir)]
+        missing = [prefix for prefix in _REQUIRED_WHEEL_PREFIXES
+                   if not any(w.startswith(_normalize(prefix)) for w in wheels)]
+        if missing:
             raise RuntimeError(
-                f"[{variant}] 依赖安装不完整，缺少: {', '.join(sorted(missing))}；"
+                f"[{variant}] 依赖 wheel 不完整，opt/packages 缺少: {', '.join(missing)}；"
                 "请检查 requirements.txt 是否列出了全部传递依赖"
             )
 
@@ -120,6 +132,12 @@ def main():
     if os.getenv("QPT_Action") == "True":
         set_default_pip_source(PYPI_PIP_SOURCE)
 
+    # 注意：不要传 ignore_dirs 参数。QPT 1.0b8 存在缺陷——仅当 ignore_dirs is None
+    # 时才初始化 self.ignore_dirs，一旦外部传入，executor.py 内部的 .append() 会抛
+    # AttributeError，导致打包在第一阶段就失败。不传时 QPT 会自行初始化该列表，
+    # 并自动忽略 .github / .git / .idea / __pycache__ / 虚拟环境等目录。
+    # 另外 .workbuddy 早已从 Git 历史与远端仓库彻底清除，CI 干净 checkout 的代码树
+    # 中根本不含该目录，无需额外排除。
     module = CEM(
         work_dir=WORK_DIR,
         launcher_py_path=LAUNCH_PATH,
@@ -128,7 +146,6 @@ def main():
         hidden_terminal=False,
         requirements_file="./requirements.txt",
         sub_modules=[],
-        ignore_dirs=[os.path.join(WORK_DIR, ".workbuddy")],
     )
     module.make()
     _post_process(SAVE_PATH)
