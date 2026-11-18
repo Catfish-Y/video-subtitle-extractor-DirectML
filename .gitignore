@@ -371,3 +371,9 @@ $RECYCLE.BIN/
 /.claude/
 /installer_output/
 /entitlements.plist
+
+# 临时验证脚本不入库
+.workbuddy/analysis/*verify*.py
+.workbuddy/analysis/probe_*.py
+.workbuddy/analysis/fetch_*.py
+.workbuddy/analysis/debug_*.py
