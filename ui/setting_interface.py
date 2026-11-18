@@ -83,8 +83,3 @@ class SettingInterface(QtWidgets.QVBoxLayout):
         
         # 添加一些空间
         self.addStretch(1)
-    
-    def reset_setting(self):
-        """重置所有设置为默认值"""
-        # 这里需要实现重置逻辑
-        pass

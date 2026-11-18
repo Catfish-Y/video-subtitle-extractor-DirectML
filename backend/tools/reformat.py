@@ -215,6 +215,9 @@ def execute(path, lang='en'):
 
 
 if __name__ == '__main__':
-    path = "/home/yao/Videos/null.srt"
-    execute(path)
+    import sys
+    if len(sys.argv) < 2:
+        print("用法: python -m backend.tools.reformat <字幕文件.srt> [语言]")
+        sys.exit(1)
+    execute(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else 'ch')
 

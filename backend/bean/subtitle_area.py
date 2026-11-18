@@ -42,7 +42,14 @@ class SubtitleArea:
         return self.ymax - self.ymin
 
     def in_ab_section(self, frame_idx):
-        return True
+        """判断给定帧号是否落在本选区的 A-B 区间内。
+
+        ``ab_section`` 为 ``None`` 时表示未设置分区，选区对所有帧有效（默认行为）。
+        设置为 ``range`` 时，仅当帧号落入该范围才有效。
+        """
+        if self.ab_section is None:
+            return True
+        return frame_idx in self.ab_section
 
     def to_polygon(self):
         return Polygon([[self.xmin, self.ymin], [self.xmax, self.ymin], [self.xmax, self.ymax], [self.xmin, self.ymax]])

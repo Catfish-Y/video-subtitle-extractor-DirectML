@@ -194,3 +194,14 @@ class TimelineSyncInterface(QWidget):
         if return_code == 0:
             self.append_log_signal.emit(f"Synced subtitle: {self.output_path}")
             return
+        self.append_log_signal.emit(f"字幕同步失败，退出码: {return_code}")
+        try:
+            from qfluentwidgets import InfoBar, InfoBarIcon
+            InfoBar.warning(
+                title=self.tr('同步失败'),
+                content=self.tr('字幕同步进程异常退出，请查看输出日志。'),
+                duration=5000,
+                parent=self,
+            )
+        except Exception:
+            pass

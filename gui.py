@@ -103,9 +103,6 @@ class SubtitleExtractorGUI(FluentWindow):
         ProcessManager().instance().terminate_all()
         super().closeEvent(event)
 
-    def _onThemeChangedFinished(self):
-        super()._onThemeChangedFinished()
-
     def save_window_position(self):
         """保存窗口位置到配置文件"""
         # 保存窗口位置和大小
@@ -113,20 +110,6 @@ class SubtitleExtractorGUI(FluentWindow):
         config.set(config.windowY, self.y())
         config.set(config.windowW, self.width())
         config.set(config.windowH, self.height())
-
-    def update_progress(self):
-        # 定时器轮询更新进度（现在更新到视频滑块上）
-        if self.se is not None:
-            try:
-                pos = min(self.frame_count - 1, int(self.se.progress_total / 100 * self.frame_count))
-                if pos != self.video_slider.value():
-                    self.video_slider.setValue(pos)
-                # 检查是否完成
-                if self.se.isFinished:
-                    self.processing_finished()
-            except Exception as e:
-                # 捕获任何异常，防止崩溃
-                print(f"更新进度时出错: {str(e)}")
 
     def load_window_position(self):
         # 尝试读取窗口位置

@@ -105,13 +105,15 @@ class ProcessManager:
                     process.wait(timeout=3)
                 except:
                     pass
-            # 进程未能正常终止，尝试强制终止
-            if hasattr(process, 'kill'):
-                process.kill()
+            # 仅在进程确实仍未退出时才强制终止，避免对已退出（或 PID 被复用）的
+            # 进程重复 kill / taskkill 而误伤无关进程。
+            if hasattr(process, 'poll') and process.poll() is None:
+                if hasattr(process, 'kill'):
+                    process.kill()
+                self.terminate_by_pid(process.pid)
         except Exception as e:
             # print(f"Error terminating process: {str(e)}")
             pass
-        self.terminate_by_pid(process.pid)
 
     def terminate_by_pid(self, pid):
         try:
