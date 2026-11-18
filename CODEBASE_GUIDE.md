@@ -1,7 +1,7 @@
 # VSE 代码库结构与维护指南
 
 > **文档目的**：对全部代码做逐文件、逐方法的梳理，作为日后**局部维护**与**全面重构**的共同基准。
-> **对应版本**：`backend/config.py` 中 `VERSION = "2.2.0"`（已完成缺陷修复、DirectML 接入与 PP-OCRv6 升级重构）。
+> **对应版本**：`backend/config.py` 中 `VERSION = "3.0.0"`（已完成缺陷修复、DirectML 接入与 PP-OCRv6 升级重构）。
 > **内容基准**：本文描述**当前磁盘上的最终代码状态**，不含变更历史。
 > **覆盖范围**：项目内全部 **41 个 Python 文件** 及 2 个 sushi bat 脚本。
 
@@ -256,7 +256,7 @@ flowchart TD
 
 | 名称 | 行号 | 说明 |
 |------|------|------|
-| `VERSION` | 10 | 版本号 `"2.2.0"`，用于窗口标题与更新比对 |
+| `VERSION` | 10 | 版本号 `"3.0.0"`，用于窗口标题与更新比对 |
 | `PROJECT_HOME_URL` / `PROJECT_ISSUES_URL` / `PROJECT_RELEASES_URL` | 11-13 | 项目主页、Issues、Releases 地址 |
 | `PROJECT_UPDATE_URLS` | 14-17 | 两个更新源（GitHub API + 加速镜像） |
 | `HARDWARD_ACCELERATION_OPTION` | 19 | 硬件加速总开关常量 `True`，**拼写保留**；作为 `hardwareAcceleration` 默认值，并被 UI 层读取 |
