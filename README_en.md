@@ -6,91 +6,9 @@
 
 ![License](https://img.shields.io/badge/License-Apache%202-red.svg)
 ![python version](https://img.shields.io/badge/Python-3.12+-blue.svg)
-![support os](https://img.shields.io/badge/OS-Windows/macOS/Linux-green.svg)
+![support os](https://img.shields.io/badge/OS-Windows-green.svg)  
 
-Video-subtitle-extractor (VSE) is a software that extracts hard-coded subtitles from videos into external subtitle files (SRT format).
-
-Key features:
-
-- Extract key frames from videos
-- Detect text positions in video frames
-- Recognize text content in video frames
-- Filter out non-subtitle text regions
-- [Remove watermarks, channel logos, and original hard-coded subtitles — use with: video-subtitle-remover (VSR)](https://github.com/YaoFANGUK/video-subtitle-remover/tree/main)
-- Remove duplicate subtitle lines and generate SRT subtitle files / TXT text files
-- Support **batch extraction** of video subtitles
-- Multi-language: supports subtitle extraction in **87 languages**, including **Simplified Chinese (Chinese-English bilingual)**, **Traditional Chinese**, **English**, **Japanese**, **Korean**, **Vietnamese**, **Arabic**, **French**, **German**, **Russian**, **Spanish**, **Portuguese**, **Italian**, and more
-- Multiple modes:
-  - **Fast**: (Recommended) Uses a lightweight model for quick subtitle extraction. May miss a small number of subtitles and have minor typos.
-  - **Auto**: (Recommended) Automatically selects the model — uses the lightweight model on CPU and the precise model on GPU. Slower extraction speed, may miss a small number of subtitles, but with almost no typos.
-  - **Precise**: (Not recommended) Uses the precise model with frame-by-frame detection on GPU. No missed subtitles and almost no typos, but **very slow**.
-
-> Please use Fast/Auto mode first. Only switch to Precise mode if the first two modes miss too many subtitle lines.
-
-<p style="text-align:center;"><img src="design/demo.png" alt="demo.png"/></p>
-
-**Highlights**:
-
-- Uses local OCR recognition — no need to configure any API or connect to online OCR services such as Baidu or Alibaba
-- Supports GPU acceleration for higher accuracy and faster extraction speed
-
-**Usage Guide**:
-
-- For questions, please join the discussion group (QQ Group): 210150985 (full), 806152575 (full), 816881808 (full), 295894827
-
-- Click [Open] to select video files, adjust the subtitle area, then click [Run]
-  - Single file extraction: Select **one** video file when opening
-  - **Batch extraction**: Select **multiple** video files when opening. Ensure all videos have the same resolution and subtitle area
-
-- Remove watermark text / Replace specific text:
-> If specific text appears in the video that needs to be removed or replaced, edit the ``backend/configs/typoMap.json`` file and add your replacements
-
-```json
-{
-	"l'm": "I'm",
-	"l just": "I just",
-	"Let'sqo": "Let's go",
-	"Iife": "life",
-	"威筋": "威胁",
-  	"性感荷官在线发牌": ""
-}
-```
-
-> This will replace all occurrences of "威筋" with "威胁" and delete all "性感荷官在线发牌" text
-
-- Please **do not use Chinese characters or spaces** in video and program paths, otherwise unexpected errors may occur!!!
-
-  > For example, the following paths are NOT acceptable:
-  >
-  > D:\下载\vse\运行程序.exe (path contains Chinese characters)
-  >
-  > E:\study\kaoyan\sanshang youya.mp4 (path contains spaces)
-
-- Download the compressed package, extract it, and run directly. If it doesn't work, try the source code installation with conda environment as described below.
-
-**Download**: <a href="https://github.com/YaoFANGUK/video-subtitle-extractor/releases"> Release </a>
-
-> **Please submit any improvement suggestions in ISSUES and DISCUSSIONS**
-
-
-
-**Recognition Mode Selection**:
-
-| Mode | GPU | OCR Model Size | Subtitle Detection Engine | Notes |
-|------|-----|----------------|---------------------------|-------|
-| Fast | Yes/No | Mini | VideoSubFinder | |
-| Auto | Yes | Large | VideoSubFinder | Recommended |
-| Auto | No | Mini | VideoSubFinder | Recommended |
-| Precise | Yes/No | Large | VSE | Very slow |
-
-> VideoSubFinder is the subtitle detection engine on Windows/Linux/macOS.
-
-## Demo
-
-- GUI version: [Click to view GPU version source code installation tutorial](https://www.bilibili.com/video/bv11L4y1Y7Tj)
-
-<p style="text-align:center;"><img src="https://github.com/YaoFANGUK/video-subtitle-extractor/raw/main/design/demo.gif" alt="demo.gif"/></p>
-
+Video-subtitle-extractor (VSE) is a software that extracts hard-coded subtitles from videos into external subtitle files (SRT format). This repository is forked from [YaoFANGUK](https://github.com/YaoFANGUK/video-subtitle-extractor) and has been extensively modified to meet our actual needs.
 
 ## Source Code Usage Guide
 
@@ -205,6 +123,3 @@ Use the "Download Missing Models" button if models are missing.
 #### 2. 7z file extraction error
 
 Solution: Upgrade 7-Zip to the latest version.
-
-## Sponsor
-<img src="https://github.com/YaoFANGUK/video-subtitle-extractor/raw/main/design/sponsor.png" width="600">
