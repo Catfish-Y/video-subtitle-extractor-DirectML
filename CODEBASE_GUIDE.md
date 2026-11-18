@@ -2451,16 +2451,17 @@ flowchart TD
 | **启动检测 + 一键下载** | `env_check.py` 在 GUI 启动时检测模型齐全性与 DML 设备；缺失时提示下载 URL/目录并提供一键下载。 |
 | **配置项全部生效** | 32 个配置项当前全部被后端读取；`recBatchNumber` → 识别批大小，`maxBatchSize` → 帧预取队列容量。 |
 | **识别批量化** | `_rec_predict_batch()` 按批大小批量推理，减少逐框调用开销。 |
-| **构建收敛** | workflow 从 5 个减为 CPU/DML 两个；移除 `pip freeze` 覆盖 requirements.txt 的问题。 |
+| **单一安装包** | 假定所有 GPU 支持 DX12，取消 CPU-only 版本：`requirements.txt` 直接用 `onnxruntime-directml`（自带 CPU + DML 双 provider），删除 `requirements_directml.txt`；workflow 收敛为唯一 `build-windows.yml`，产物不再区分 CPU/DML。 |
+| **构建收敛** | workflow 从 5 个减为 1 个；移除 `pip freeze` 覆盖 requirements.txt 的问题。 |
 
 ### 仍建议后续推进
 
 - **第三方许可**：sushi 上游为 MIT，仓库根目录为 Apache-2.0，缺第三方声明文件。
-- **多选区落地**：后端 `sub_area` 仍是单值，GUI 只取第一个选区。
+- **多选区贯通（已决定暂缓）**：GUI 支持绘制多个选区并完整保存到任务的 `SUB_AREAS`，但 `ui/home_interface.py` 启动提取时 `value = value[0]` 只取第一个，后端 `backend/main.py` / `backend/tools/subtitle_ocr.py` 全程使用单个 `SubtitleArea`。因此"画了多个框只有第一个生效"。效用：同帧多处字幕（原文+译文）、分时段不同位置的字幕可分别覆盖，并更可靠地过滤框外文字。贯通需改 3 处（GUI 传完整列表、后端 `sub_area` 改列表、过滤改为命中任一选区即保留并让 A-B 区间按帧生效）；用户已决定暂不实施，待 GUI 可运行验证时再做。
 - **断点续传**：`run()` 开头无条件删缓存，尚无中断续跑能力。
 - **主题系统**：主题监听代码未启用，可决定恢复或彻底移除。
 - **自动化测试**：关键路径（三模式、批量任务、时间轴同步、模型下载）建议补自动化用例。
-- **CPU 性能**：ONNX CPU 推理相比 PaddlePaddle MKLDNN 可能略慢，如追求 CPU 极限可专项优化。
+- **CPU 性能（已权衡，保持 ONNX）**：实测（1280×720）精准档 ONNX CPU ≈794ms/帧 vs DML ≈182ms/帧，轻量档 CPU ≈674ms vs DML ≈161ms；有 GPU 时走 DML，CPU 仅兜底。PaddlePaddle 空间占用（paddle 380MB + paddlex 13MB）远大于 ONNX Runtime（≈71MB），与"安装包尽量小 + 单一版本"目标冲突，故不回退 PaddlePaddle。若未来极致追求 CPU 速度可专项再评估。
 
 ---
 
