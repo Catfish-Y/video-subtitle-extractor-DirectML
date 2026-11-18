@@ -169,31 +169,32 @@ cd <源码所在目录>
 ##### (2) DirectML（AMD、Intel等GPU/APU加速卡用户）
 
 - 适用于 Windows 设备的 AMD/NVIDIA/Intel GPU
-- 安装 ONNX Runtime DirectML 版本：
+- DirectML 后端使用官方 **PP-OCRv5 ONNX 模型**，通过 ONNX Runtime 的
+  `DmlExecutionProvider` 真正执行 GPU 推理（PaddlePaddle 本身不支持 DirectML）。
+  程序在检测到 DML provider 时自动启用，无需手动切换；不可用时回退 CPU。
+- 首次运行会自动从百度官方源下载 ONNX 模型到 `~/.paddleocr/onnx/`（不随仓库分发），
+  可通过环境变量 `VSE_ONNX_MODEL_DIR` 指定模型目录。
+- 安装步骤：
   ```shell
   pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
   pip install -r requirements.txt
   pip install -r requirements_directml.txt
   ```
+  > 注意：`onnxruntime-directml` 需 1.24.4 及以上（1.20.1 在 Python 3.13 上无法安装）。
 
-##### (3) ONNX (适合macOS、AMD ROCm等环境加速用户, 基础环境与DirectML方式一致，未测试！)
+##### (3) 其它 ONNX 执行后端（macOS / Linux，实验性）
 
 - 使用这个方式部署请勿反馈Issues
-- 适用于 Linux 或 macOS 设备的 AMD/Metal GPU/Apple Silicon GPU
-- 安装 ONNX Runtime DirectML 版本：
+- DirectML 之外的 ONNX 后端（CoreML / ROCm / OpenVINO 等）需要对应的
+  `onnxruntime-*` 包。`dml_ocr.py` 的 provider 列表默认优先
+  `DmlExecutionProvider`，如需改用其它后端，可在创建 `DmlOcrRecogniser` 时
+  通过 `providers` 参数显式指定（例如 `['CoreMLExecutionProvider', 'CPUExecutionProvider']`）。
+- 安装基础环境后按需安装对应执行提供程序：
   ```shell
   pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
   pip install -r requirements.txt
-
-  # 阅读文档 https://onnxruntime.ai/docs/execution-providers/
-  # 根据你的设备选择合适的执行后端, 参考requirements_directml.txt文件修改成合适你环境的依赖
-
-  # 例如:
-  # requirements_coreml.txt
-  #   paddle2onnx==1.3.1
-  #   onnxruntime-coreml==1.13.1
-
-  pip install -r requirements_coreml.txt
+  # 阅读文档 https://onnxruntime.ai/docs/execution-providers/ 选择匹配你设备的包
+  # 例如 Apple Silicon: pip install onnxruntime-coreml onnx
   ```
 
 ##### (4) CPU 运行（无 GPU 加速）

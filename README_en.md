@@ -172,32 +172,33 @@ This project supports four runtime modes: CUDA (NVIDIA GPU acceleration), CPU (n
 ##### (2) DirectML (AMD, Intel GPU/APU Users)
 
 - Suitable for AMD/NVIDIA/Intel GPUs on Windows
-- Install ONNX Runtime DirectML version:
+- The DirectML backend uses official **PP-OCRv5 ONNX models** and runs inference
+  through ONNX Runtime's `DmlExecutionProvider` (PaddlePaddle itself has no DirectML
+  support). It is enabled automatically when a DML provider is detected, and falls
+  back to CPU otherwise — no manual switch required.
+- On first run, ONNX models are downloaded from the official Baidu mirror to
+  `~/.paddleocr/onnx/` (not bundled in the repo). Set `VSE_ONNX_MODEL_DIR` to override.
+- Install:
   ```shell
   pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
   pip install -r requirements.txt
   pip install -r requirements_directml.txt
   ```
+  > Note: `onnxruntime-directml` 1.24.4+ is required (1.20.1 fails to install on Python 3.13).
 
-##### (3) ONNX (For macOS, AMD ROCm, etc. — uses the same base setup as DirectML, untested!)
+##### (3) Other ONNX execution providers (macOS / Linux, experimental)
 
 - Please do not submit issues if using this deployment method
-- Suitable for AMD/Metal GPU/Apple Silicon GPU on Linux or macOS
-- Install ONNX Runtime:
+- For ONNX providers other than DirectML (CoreML / ROCm / OpenVINO, etc.), install
+  the matching `onnxruntime-*` package. `dml_ocr.py` prefers
+  `DmlExecutionProvider` by default; pass an explicit `providers` argument to
+  `DmlOcrRecogniser` to use another one (e.g. `['CoreMLExecutionProvider', 'CPUExecutionProvider']`).
+- Install the base environment then the provider you need:
   ```shell
   pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
   pip install -r requirements.txt
-
-  # Read the documentation at https://onnxruntime.ai/docs/execution-providers/
-  # Choose the appropriate execution backend for your device.
-  # Refer to requirements_directml.txt and modify the dependencies for your environment.
-
-  # For example:
-  # requirements_coreml.txt
-  #   paddle2onnx==1.3.1
-  #   onnxruntime-coreml==1.13.1
-
-  pip install -r requirements_coreml.txt
+  # See https://onnxruntime.ai/docs/execution-providers/ for provider-specific packages
+  # e.g. Apple Silicon: pip install onnxruntime-coreml onnx
   ```
 
 ##### (4) CPU Mode (No GPU Acceleration)
