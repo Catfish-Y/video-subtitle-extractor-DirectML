@@ -1,24 +1,24 @@
 # VSE 代码库结构与维护指南
 
 > **文档目的**：对全部代码做逐文件、逐方法的梳理，作为日后**局部维护**与**全面重构**的共同基准。
-> **对应版本**：`backend/config.py` 中 `VERSION = "2.2.0"`（已完成一轮缺陷修复与 DirectML 后端接入）。
-> **内容基准**：本文描述的是**当前磁盘上的最终代码状态**，不含变更历史。
-> **覆盖范围**：项目内全部 **41 个 Python 文件** 及 2 个 sushi bat 脚本；配置项、语言资源、二进制依赖以清单/说明形式记录。
+> **对应版本**：`backend/config.py` 中 `VERSION = "2.2.0"`（已完成缺陷修复、DirectML 接入与 PP-OCRv6 升级重构）。
+> **内容基准**：本文描述**当前磁盘上的最终代码状态**，不含变更历史。
+> **覆盖范围**：项目内全部 **41 个 Python 文件** 及 2 个 sushi bat 脚本。
 
 ---
 
 ## 阅读导航
 
-| 章节 | 内容 | 对应分片 |
+| 章节 | 内容 | 分片 |
 |---|---|---|
 | [一、入口与配置核心](#一入口与配置核心) | `gui.py`、`config.py`、`subtitle_area.py`、`constant.py` | 01 |
-| [二、核心引擎 backend/main.py](#二核心引擎-backendmainpy) | `SubtitleExtractor` 全部方法逐一详解 | 02 |
-| [三、后端工具模块](#三后端工具模块-backendtools) | OCR、DirectML、模型、检测、进程、格式化、更新等 14 个文件 | 03 |
+| [二、核心引擎 backend/main.py](#二核心引擎-backendmainpy) | `SubtitleExtractor` 全部方法详解 | 02 |
+| [三、后端工具模块](#三后端工具模块-backendtools) | onnx_ocr、ocr、env_check 等 15 个文件 | 03 |
 | [四、并发工具框架](#四并发工具框架-backendtoolsconcurrent) | `concurrent/` 下 Future / Task / TaskManager | 04 |
-| [五、sushi 时间轴同步模块](#五sushi-时间轴同步模块-backendsushi) | 时间轴平移算法与 CLI 入口，10 个 py + 2 个 bat | 05 |
+| [五、sushi 时间轴同步模块](#五sushi-时间轴同步模块-backendsushi) | 时间轴平移算法与 CLI 入口 | 05 |
 | [六、UI 界面层](#六ui-界面层-ui) | 三个 Interface 与图标模块 | 06 |
-| [七、UI 组件](#七ui-组件-uicomponent) | 视频框选组件、批量任务列表组件 | 07 |
-| [八、汇总：已修复项与后续建议](#八汇总已修复项与后续建议) | 修复清单与后续重构方向 | 本文件 |
+| [七、UI 组件](#七ui-组件-uicomponent) | 视频框选、批量任务列表组件 | 07 |
+| [八、修复与优化汇总](#八修复与优化汇总) | 已处理项与后续建议 | 本文件 |
 
 ---
 
@@ -28,120 +28,119 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 入口层      gui.py（FluentWindow，仅做容器与生命周期管理）      │
+│ 入口层      gui.py（FluentWindow，容器与生命周期管理）         │
 ├──────────────────────────────────────────────────────────────┤
-│ 界面层      ui/                                               │
-│             HomeInterface（主工作流）                          │
-│             AdvancedSettingInterface（参数/关于/更新）          │
-│             TimelineSyncInterface（sushi 前端）                │
-│             component/（视频框选、任务列表）                    │
+│ 界面层      ui/  HomeInterface / AdvancedSetting / TimelineSync│
+│             component/（视频框选、任务列表）                   │
+│             setting_interface：后端/档位/设备/模型检测          │
 ├──────────────────────────────────────────────────────────────┤
-│ 业务层      backend/main.py — SubtitleExtractor（1131 行）     │
-│             backend/sushi/ — 独立的时间轴同步子工具             │
+│ 业务层      backend/main.py — SubtitleExtractor（1073 行）    │
+│             backend/sushi/ — 独立时间轴同步子工具              │
 ├──────────────────────────────────────────────────────────────┤
-│ 支撑层      backend/tools/*                                   │
-│             ├─ PaddleOCR 路径（ocr.py + paddle_model_config）  │
-│             ├─ DirectML 路径（dml_ocr.py，ONNX Runtime）       │
-│             └─ 进程/格式化/版本/远程调用等工具                  │
-│             backend/config.py（全局 QConfig 单例 + 多语言 tr）  │
+│ 支撑层      backend/tools/                                   │
+│   ocr.py（门面）→ onnx_ocr.py（ONNX Runtime 推理，唯一 OCR 后端）│
+│   env_check.py（启动检测）/ hardware_accelerator.py（设备枚举） │
+│   subtitle_ocr.py / reformat.py / process_manager.py 等        │
 ├──────────────────────────────────────────────────────────────┤
-│ 外部依赖    PaddleOCR v5 模型 / 官方 ONNX 模型、VideoSubFinder │
-│             、ffmpeg                                          │
+│ 外部依赖    onnxruntime(CPU/DML)、官方 PP-OCRv6 ONNX 模型、   │
+│             VideoSubFinder.exe、ffmpeg                        │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+> **重要变更**：本项目现在**仅支持 Windows**，且**只有 CPU 与 DirectML 两种后端**。
+> 已彻底移除 PaddlePaddle / PaddleOCR 依赖与 CUDA 分支，OCR 统一走 ONNX Runtime。
 
 ### 字幕提取主数据流
 
 ```mermaid
 flowchart LR
     A[视频输入] --> B{有字幕选区?}
-    B -->|否| C[按帧率采样 extract_frame_by_fps]
-    B -->|是| D{模式为 accurate?}
+    B -->|否| C[按帧率采样]
+    B -->|是| D{模式 accurate?}
     D -->|是| E[逐帧检测 extract_frame_by_det]
     D -->|否| F[VideoSubFinder extract_frame_by_vsf]
-    C --> G{OCR 后端选择}
+    C --> G[OCR 子进程 subtitle_ocr.py]
     E --> G
     F --> G
-    G -->|CUDA| H[PaddleOCR gpu:0]
-    G -->|DML/ONNX| I[dml_ocr.py + DmlExecutionProvider]
-    G -->|无加速| J[PaddleOCR cpu]
-    H --> K[过滤 · 去重 · 分词 reformat.py]
-    I --> K
+    G --> H[OcrRecogniser 门面]
+    H -->|DML/auto| I[OnnxOcrRecogniser + DmlExecutionProvider]
+    H -->|cpu| J[OnnxOcrRecogniser + CPUExecutionProvider]
+    I --> K[过滤 · 去重 · 分词 reformat.py]
     J --> K
     K --> L[输出 SRT / TXT]
 ```
 
 **关键约定**
 - 进度总量 `300` = 抽帧 `100` + OCR `100` + 后处理 `100`。
-- 任务元组统一为 `(总帧数, 当前帧号, dt_box, rec_res, total_ms, subtitle_area)`；`total_ms` 非 `None` 表示帧来自 VSF。
-- OCR 原始结果落盘 `output/<视频名>/subtitle/raw.txt`，格式 `帧号\t(xmin,xmax,ymin,ymax)\t文本`。
-- 最终字幕默认写在**视频同目录**（GUI 可通过 `saveDirectory` 覆盖），临时文件在**项目根 `output/`**。
-- DirectML 后端按需下载官方 PP-OCRv5 ONNX 模型到 `~/.paddleocr/onnx/`（可用 `VSE_ONNX_MODEL_DIR` 覆盖），不随仓库分发。
+- 任务元组：`(总帧数, 当前帧号, dt_box, rec_res, total_ms, subtitle_area)`。
+- OCR 原始结果落盘 `output/<视频名>/subtitle/raw.txt`；最终字幕在视频同目录（可由 `saveDirectory` 覆盖）。
+- **模型档位**（与 mode 正交）：`light`=det small + rec tiny；`precise`=det small + rec small。
+- **后端**：`auto`（有 DML 设备则用 DML）、`cpu`、`dml`；总开关 `hardwareAcceleration` 关闭时强制 CPU。
+- ONNX 模型下载到 `~/.paddleocr/onnx/`（`VSE_ONNX_MODEL_DIR` 可覆盖），不入库。
 
 ### 跨模块调用关系
 
 ```mermaid
 flowchart TD
     GUI[gui.py] --> HOME[ui/home_interface.py]
+    GUI --> SET[ui/setting_interface.py]
     GUI --> ADV[ui/advanced_setting_interface.py]
     GUI --> SYNC[ui/timeline_sync_interface.py]
-    HOME --> VID[ui/component/video_display_component.py]
-    HOME --> TASK[ui/component/task_list_component.py]
-    HOME --> PROC[multiprocessing.Process spawn]
-    PROC --> MAIN[backend/main.py SubtitleExtractor]
-    MAIN --> CFG[backend/config.py 全局 config]
+    SET --> ENV[tools/env_check.py]
+    ENV --> ONNX[tools/onnx_ocr.py]
+    HOME --> VID[component/video_display_component.py]
+    HOME --> TASK[component/task_list_component.py]
+    HOME --> PROC[multiprocessing.Process]
+    PROC --> MAIN[backend/main.py]
     MAIN --> VSF[VideoSubFinderWXW.exe]
-    MAIN --> OCRP[tools/subtitle_ocr.py OCR 子进程]
-    OCRP --> OCR[tools/ocr.py OcrRecogniser]
-    OCR -->|CUDA/CPU| PADDLE[PaddleOCR]
-    OCR -->|DML/ONNX| DML[tools/dml_ocr.py]
-    DML --> ORT[onnxruntime DmlExecutionProvider]
-    DML --> DL[官方 ONNX 模型按需下载]
+    MAIN --> OCRP[tools/subtitle_ocr.py]
+    OCRP --> OCR[tools/ocr.py 门面]
+    OCR --> ONNX
+    ONNX --> ORT[onnxruntime CPU/DML provider]
+    ONNX --> DL[官方 PP-OCRv6 ONNX 模型]
+    MAIN --> DET[tools/subtitle_detect.py det_only]
+    DET --> ONNX
     MAIN --> REFORM[tools/reformat.py]
-    MAIN --> DET[tools/subtitle_detect.py]
     MAIN --> PM[tools/process_manager.py]
     HOME --> RC[tools/subtitle_extractor_remote_call.py]
     SYNC --> RUNNER[tools/python_runner.py]
     RUNNER --> SUSHI[sushi/__main__.py]
-    SUSHI --> SUSHIINIT[sushi/__init__.py 算法]
-    SUSHIINIT --> WAV[sushi/wav.py]
-    SUSHIINIT --> DEMUX[sushi/demux.py]
-    ADV --> VER[tools/version_service.py]
+    SUSHI --> SUSHIINIT[sushi/__init__.py]
 ```
 
 ---
 
 ## 代码文件总表
 
-行数为当前最终代码的静态统计；"章节"列指向本文详细分析位置。
+行数为当前最终代码统计。
 
 | 文件 | 行数 | 一句话职责 | 章节 |
 |---|---:|---|---|
 | `gui.py` | 173 | 程序入口、主窗口与三页容器 | 一 |
 | `backend/__init__.py` | 3 | 注入 `dependencies/` 到 `sys.path` | 一 |
-| `backend/config.py` | 113 | 全局 QConfig、多语言 tr、版本与路径常量 | 一 |
+| `backend/config.py` | 120 | 全局 QConfig（32 项，全部生效）、多语言 tr | 一 |
 | `backend/bean/subtitle_area.py` | 55 | 字幕选区 dataclass 与几何/AB 区间运算 | 一 |
 | `backend/tools/constant.py` | 30 | 字幕位置、VSF 解码器枚举 | 一 |
-| `backend/main.py` | 1131 | **核心引擎**：抽帧、OCR 调度、去重、输出 | 二 |
+| `backend/main.py` | 1073 | **核心引擎**：抽帧、OCR 调度、去重、输出 | 二 |
 | `backend/tools/__init__.py` | 0 | 空包标记 | 三 |
-| `backend/tools/hardware_accelerator.py` | 94 | CUDA / ONNX provider 检测单例 | 三 |
-| `backend/tools/makedist.py` | 56 | QPT 打包脚本（Debug/Release） | 三 |
-| `backend/tools/ocr.py` | 150 | OCR 后端门面：PaddleOCR 与 DML 切换 | 三 |
-| `backend/tools/dml_ocr.py` | 354 | **DirectML 后端**：ONNX Runtime 推理 + 前后处理 | 三 |
-| `backend/tools/paddle_model_config.py` | 159 | 语言/模式 → 模型路径与 model_name | 三 |
+| `backend/tools/onnx_ocr.py` | 461 | **统一 OCR 后端**：ONNX Runtime CPU/DML + PP-OCRv6 + 前后处理 | 三 |
+| `backend/tools/ocr.py` | 117 | OCR 门面：后端/档位/设备配置解析与结果排序 | 三 |
+| `backend/tools/env_check.py` | 81 | 启动检测：DML 设备、模型齐全性、一键下载 | 三 |
+| `backend/tools/hardware_accelerator.py` | 59 | DML 设备枚举单例（已移除 CUDA） | 三 |
+| `backend/tools/makedist.py` | 34 | QPT 打包（CPU/DML，无 CUDA） | 三 |
 | `backend/tools/process_manager.py` | 130 | 子进程登记与跨平台终止 | 三 |
 | `backend/tools/python_runner.py` | 169 | 异步启动 Python 子进程并回调输出 | 三 |
 | `backend/tools/reformat.py` | 223 | 分词、typoMap 替换、标点规范化 | 三 |
-| `backend/tools/subtitle_detect.py` | 37 | 精准模式文本框检测封装 | 三 |
+| `backend/tools/subtitle_detect.py` | 35 | 精准模式文本框检测（ONNX det_only） | 三 |
 | `backend/tools/subtitle_extractor_remote_call.py` | 71 | 跨进程进度/日志队列协议 | 三 |
-| `backend/tools/subtitle_ocr.py` | 302 | OCR 子进程：生产者/消费者、区域过滤、落盘 | 三 |
-| `backend/tools/theme_listener.py` | 26 | 系统主题监听（当前未启用） | 三 |
-| `backend/tools/version_service.py` | 84 | GitHub/镜像更新检查与系统代理读取 | 三 |
+| `backend/tools/subtitle_ocr.py` | 303 | OCR 子进程：生产者/消费者、区域过滤、落盘 | 三 |
+| `backend/tools/theme_listener.py` | 26 | 系统主题监听（未启用） | 三 |
+| `backend/tools/version_service.py` | 84 | 更新检查与系统代理读取 | 三 |
 | `backend/tools/concurrent/__init__.py` | 1 | 空包标记 | 四 |
 | `backend/tools/concurrent/future.py` | 248 | Qt 线程池 Future 实现 | 四 |
 | `backend/tools/concurrent/task.py` | 48 | QRunnable 任务封装 | 四 |
 | `backend/tools/concurrent/task_manager.py` | 111 | TaskExecutor 单例调度器 | 四 |
-| `backend/sushi/__init__.py` | 699 | **sushi 核心算法**：分组、波形匹配、平移字幕 | 五 |
+| `backend/sushi/__init__.py` | 699 | sushi 核心算法：分组、波形匹配、平移字幕 | 五 |
 | `backend/sushi/__main__.py` | 155 | sushi CLI 参数解析与入口 | 五 |
 | `backend/sushi/chapters.py` | 37 | 章节时间解析 | 五 |
 | `backend/sushi/common.py` | 42 | 通用工具函数与异常类 | 五 |
@@ -153,20 +152,18 @@ flowchart TD
 | `backend/sushi/wav.py` | 190 | WAV 解码、降采样与模板匹配 | 五 |
 | `ui/home_interface.py` | 630 | 主工作流：选视频、框选、批量运行、进度日志 | 六 |
 | `ui/advanced_setting_interface.py` | 327 | 高级参数卡片、关于与更新 | 六 |
-| `ui/setting_interface.py` | 85 | 常用设置卡片（语言/模式/加速等） | 六 |
+| `ui/setting_interface.py` | 130 | 常用设置：后端/档位/设备/模型检测 | 六 |
 | `ui/timeline_sync_interface.py` | 207 | sushi 的 GUI 前端 | 六 |
 | `ui/icon/my_fluent_icon.py` | 11 | 跟随主题的停止图标 | 六 |
 | `ui/component/task_list_component.py` | 395 | 批量任务数据模型与列表 UI | 七 |
 | `ui/component/video_display_component.py` | 976 | 视频预览、鼠标框选、坐标换算、快捷键 | 七 |
 
-**非代码但需要知道的资源**
-- `backend/interface/*.ini`：8 种界面语言（ch / chinese_cht / en / ko / japan / vi / es / tr），各 11 个 section、243 个 key。
-- `backend/configs/typoMap.json`：文本替换规则，key 按**正则**处理。
-- `backend/subfinder/windows/`：VideoSubFinderWXW.exe + FFmpeg 4.x / OpenCV 4.3 / CUDA 11 运行库 + `settings/general.cfg`。**无 macOS/Linux 二进制**。
-- `backend/tools/NotoSansCJK-Bold.otf`：打包用字体。
-- `design/`：图标与演示素材，不参与运行。
-- `.github/workflows/*.yml`：5 套 Windows 打包发布流程（CPU / DirectML / CUDA 10.2 / 11.8 / 12.6）。
-- `requirements.txt` / `requirements_directml.txt` / `.condarc`：依赖与环境配置；DirectML 依赖见后者。
+**非代码资源**
+- `backend/interface/*.ini`：8 种界面语言（各含后端/档位/设备/模型检测文案）。
+- `backend/configs/typoMap.json`：文本替换规则（key 为正则）。
+- `backend/subfinder/windows/`：VideoSubFinder.exe + FFmpeg/OpenCV/CUDA 运行库；**无 macOS/Linux 二进制**。
+- `.github/workflows/`：仅 `build-windows-cpu.yml` 与 `build-windows-directml.yml`。
+- `requirements.txt` / `requirements_directml.txt`：CPU / DML 依赖（DML 版需先卸载 CPU 版 onnxruntime）。
 
 ---
 
@@ -176,1270 +173,1174 @@ flowchart TD
 
 ## 一、入口与配置核心
 
-这组文件构成整个 VSE 应用的"启动骨架"：`gui.py` 是唯一的进程入口与主窗口容器（当前 173 行，只负责界面装配与生命周期，不含 OCR 逻辑、不含进度轮询），`backend/__init__.py` 负责把内置依赖目录注入导入路径，`backend/config.py` 是全局唯一的 qfluentwidgets 配置中心（UI 卡片与 OCR 后端都从这里取值），`backend/bean/subtitle_area.py` 与 `backend/tools/constant.py` 提供被 UI 与后端共同引用的数据载体和枚举。它们本身不执行 OCR，但决定了程序能否启动、使用哪套语言/模型/解码器参数，以及选区坐标如何表达。任何局部改动前都应先确认这里暴露的"配置键—UI 卡片—读取方"契约。
+本分片覆盖应用的启动入口与全局配置核心，共五个文件：`gui.py`（应用主窗口与进程入口）、`backend/__init__.py`（依赖路径注入）、`backend/config.py`（QConfig 配置中心与全局常量）、`backend/bean/subtitle_area.py`（字幕选区数据类）、`backend/tools/constant.py`（核心枚举与颜色常量）。
 
----
+整体定位如下：
+
+- `gui.py` 是基于 PySide6 + qfluentwidgets 的程序入口，构建三标签主窗口（主页 / 时间轴同步 / 高级设置），负责窗口生命周期、更新提醒、窗口位置持久化与子进程清理。
+- `backend/config.py` 是唯一的配置中心，以 `QConfig` 子类 `Config` 集中声明 **32 项配置**，通过 `qconfig.load` 从 `config/config.json` 载入，并按界面语言动态加载 `interface/*.ini` 翻译。
+- 当前项目**仅支持 Windows 平台、CPU 与 DML 两种 OCR 后端**；OCR 推理统一走 `onnxruntime` + 官方 **PP-OCRv6 ONNX 模型**；`requirements.txt` / `requirements_directml.txt` 中已不含 PaddlePaddle / PaddleOCR（CPU 版 `onnxruntime~=1.24` 与 DML 版 `onnxruntime-directml>=1.24.4` 二选一，不可共存）。
+- `config.py` 中新增的 `ocrBackend`（auto/cpu/dml）、`modelTier`（light/precise）、`dmlDeviceId`（'' + '0'..'7'）三项，配合保留的 `hardwareAcceleration` 总开关（关闭时强制 CPU），共同构成后端选择链路。
+- `config.py` 顶部常量 `HARDWARD_ACCELERATION_OPTION`（**拼写保留**）仍存在，作为 `hardwareAcceleration` 的默认值来源，并在 UI 层被读取用于强制关闭开关。
+
+以下各文件行号均基于当前磁盘文件重新核对。
 
 ### gui.py
-- **路径**：`gui.py`
-- **规模**：173 行（类定义 33-153，脚本入口 156-173）
-- **职责**：程序入口与主窗口 `SubtitleExtractorGUI(FluentWindow)` 的唯一定义处。负责创建三个子界面（首页、时间轴同步、高级设置）、连接 `config.appRestartSig`、启动时延迟触发更新检查、保存/恢复窗口位置、退出时终止所有子进程，并在 `__main__` 中完成多进程启动方式、高 DPI 策略与淡入动画设置。当前类中的方法均为容器/生命周期管理：没有进度更新方法，也没有主题切换回调覆盖（主题相关代码整体处于注释状态）。OCR 与进度展示逻辑全部在 `ui/` 下的三个 Interface 中。
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/gui.py`
+- **规模**：173 行
+- **职责**：程序入口与主窗口。继承 `FluentWindow`，创建三个子界面（Home / TimelineSync / AdvancedSetting），管理窗口图标与标题、主题与云母效果、启动更新检查、配置重启提示、窗口位置持久化、Ctrl+C 退出，并在 `if __name__ == '__main__'` 中完成多进程与高 DPI 初始化及事件循环。
+
 - **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `SubtitleExtractorGUI` | 33-153 | 主窗口类，继承 `FluentWindow`；仅承担界面容器与生命周期职责 |
-| `__init__` | 34-53 | 禁用云母(37)、主题设置与系统主题色均为注释(39-40)、主题监听器创建/启动为注释(43-44)、导航展开宽度(46)、窗口图标(48)、标题(49)，调用 `_create_layout`(51)、`_connectSignalToSlot`(52)、`_lazy_check_update`(53) |
-| `_lazy_check_update` | 55-62 | `config.checkUpdateOnStartup.value` 为真时，用单次 `QTimer` 延迟 2000ms 调 `advancedSettingInterface.check_update(ignore=True)`(61) |
+|------|------|------|
+| `SubtitleExtractorGUI` | 33-153 | 主窗口类，继承 `FluentWindow` |
+| `__init__` | 34-53 | 禁用云母效果、设置图标/标题（`tr[...] + VERSION`）、调用布局/信号/更新检查初始化 |
+| `_lazy_check_update` | 55-62 | 依据 `config.checkUpdateOnStartup` 延迟 2s 触发 `advancedSettingInterface.check_update(ignore=True)` |
 | `_connectSignalToSlot` | 64-65 | 将 `config.appRestartSig` 连接到 `_showRestartTooltip` |
-| `_showRestartTooltip` | 67-74 | 用 `InfoBar.success` 提示"配置重启后生效" |
-| `_create_layout` | 76-88 | 实例化 `HomeInterface`(78)、`TimelineSyncInterface`(80)、`AdvancedSettingInterface`(82)，设 objectName，再经 `addSubInterface` 加入导航；高级设置位于 `NavigationItemPosition.BOTTOM`(88) |
-| `switchTo` | 90-95 | 覆盖父类切换；切到高级设置时用 `QTimer.singleShot` 在 222ms(93)/666ms(95) 两次调用 `macos_scrollarea_issue_workaround()` |
-| `closeEvent` | 97-104 | 保存窗口位置(99)、主题监听器清理为注释(101-102)、`ProcessManager().instance().terminate_all()`(103)、交父类(104) |
-| `save_window_position` | 106-112 | 把 `x()/y()/width()/height()` 写回 `config.windowX/Y/W/H`(109-112) |
-| `load_window_position` | 114-136 | 读四个位置配置项(117-120)；缺失(122-124)或越界(128-133)则 `center_window()`；异常兜底(134-136) |
-| `center_window` | 138-144 | 基于 `frameGeometry()` 与屏幕中心点调用 `move()` |
-| `keyPressEvent` | 146-153 | 捕获 Ctrl+C 调 `self.close()`(149-151)，其余交父类(153) |
-| `__main__` 块 | 156-173 | `multiprocessing.set_start_method("spawn")`(157)、高 DPI 策略(158-159)、`QApplication`(160)、`AA_DontCreateNativeWidgetSiblings`(161)、窗口创建(162)、透明淡入(164-172)、`app.exec()`(173) |
+| `_showRestartTooltip` | 67-74 | `InfoBar.success` 提示"配置重启生效" |
+| `_create_layout` | 76-88 | 创建三个 Interface 并用 `addSubInterface` 注册，设置页位于 `NavigationItemPosition.BOTTOM` |
+| `switchTo` | 90-95 | 切换界面；进入设置页时用 222ms / 666ms 两次延时做 macOS 滚动区 workaround |
+| `closeEvent` | 97-104 | 保存窗口位置、`ProcessManager().instance().terminate_all()`、再交给父类 |
+| `save_window_position` | 106-112 | `config.set` 写回 `windowX/windowY/windowW/windowH` |
+| `load_window_position` | 114-136 | 读取窗口坐标并校验是否落在主屏可用区内，否则居中 |
+| `center_window` | 138-144 | 窗口居中 |
+| `keyPressEvent` | 146-153 | 捕获 Ctrl+C 关闭程序 |
+| `__main__` 入口块 | 156-173 | `multiprocessing` 设 `spawn`、高 DPI 舍入策略、`QApplication`、渐显动画、`app.exec()` |
 
-- **调用关系**：
-  - 导入：`backend.config` 的 `config`、`tr`、`VERSION`(25)；`backend.tools.theme_listener.SystemThemeListener`(26，当前仅出现在注释中)；`backend.tools.process_manager.ProcessManager`(27)；`ui.advanced_setting_interface.AdvancedSettingInterface`(28)；`ui.home_interface.HomeInterface`(29)；`ui.timeline_sync_interface.TimelineSyncInterface`(30)。
-  - 无人 `import gui`；它只作为脚本入口被 `__main__`(156-173) 驱动。
-  - 主动调用：`advancedSettingInterface.check_update(ignore=True)`(61)、`advancedSettingInterface.macos_scrollarea_issue_workaround()`(93,95)、`ProcessManager.instance().terminate_all()`(103)、`config.set(...)`(109-112)、`config.appRestartSig.connect(...)`(65)、`config.windowX/Y/W/H.value`(117-120)。
-- **依赖与数据流**：所有窗口几何状态经由 `backend.config` 的四个 `ConfigItem` 持久化；`tr` 字典提供标题/导航文本(49、86-88)；`VERSION` 拼入窗口标题(49)；PySide6 的 `QTimer`/`QPropertyAnimation` 控制启动时序；`multiprocessing.set_start_method("spawn")`(157) 影响后续所有子进程的创建方式。
+- **调用关系**：作为脚本被直接启动（`python gui.py`）。导入 `backend.config` 的 `config / tr / VERSION`（25）、`ProcessManager`（27）、系统主题监听器（26，实例已注释）、`AdvancedSettingInterface / HomeInterface / TimelineSyncInterface`（28-30）以及大量 qfluentwidgets 组件（18-22）。
+
+- **依赖与数据流**：
+  - 从 `config` 读取 `checkUpdateOnStartup`（57）与 `windowX/Y/W/H`（117-120）；向 `config` 写回窗口坐标（109-112）。
+  - 通过 `config.appRestartSig` 接收配置变更后的重启通知（65）。
+  - 退出时经 `ProcessManager` 终止所有子进程（103）。
+  - 窗口标题依赖 `tr` 与 `VERSION`（49）；窗口图标为相对路径 `design/vse.ico`（48）。
+
 - **维护与重构注意点**：
-  - **类职责边界**：`SubtitleExtractorGUI` 当前没有进度轮询方法，也不覆盖任何主题切换回调；进度/帧号相关状态（`self.se`、`self.frame_count`、`self.video_slider`、`processing_finished()`）本就属于 `HomeInterface`（`ui/home_interface.py`），不应在本类重新引入，否则会再次出现字段缺失。需要进度展示时应在 `HomeInterface` 内实现。
-  - **主题系统未启用**：`setTheme`/`setThemeColor`(39-40)、`SystemThemeListener` 的创建/启动(43-44)与终止/回收(101-102)均被注释，当前"跟随系统主题色"不生效；重构时需决定恢复还是彻底移除相关依赖。
-  - **未使用的导入**：`os`(11)、`configparser`(12)、`cv2`(13)，以及 qfluentwidgets 中的 `PushButton`、`Slider`、`ProgressBar`、`PlainTextEdit`、`setTheme`、`Theme`、`CardWidget`、`SettingCardGroup`、`ComboBoxSettingCard`、`SwitchSettingCard`、`setThemeColor`、`OptionsConfigItem`、`OptionsValidator`、`SubtitleLabel`、`HollowHandleStyle`、`qconfig`、`ConfigItem`、`QConfig`、`NavigationWidget`、`isDarkTheme`、`getSystemAccentColor`(18-24) 在本文件中无实际使用（实际使用的有 `FluentWindow`、`FluentIcon`、`NavigationItemPosition`、`InfoBar`、`QApplication`、`QWidget`）；建议清理以降低启动开销与耦合。
-  - **相对路径风险**：`setWindowIcon(QtGui.QIcon("design/vse.ico"))`(48) 依赖当前工作目录，打包或从其它目录启动时图标会丢失；应改为基于 `backend.config.BASE_DIR` / `__file__` 的绝对路径。
-  - **脆弱的时序/私有 API**：`navigationInterface.panel.minimumExpandWidth = 999999`(46) 依赖 qfluentwidgets 私有结构；222ms/666ms 的 macOS 滚动区 workaround(93-95) 是硬编码竞态规避，升级 qfluentwidgets 后需回归验证。
-  - **窗口位置校验**：128-131 行用 `primaryScreen().availableGeometry().width()/height()` 与绝对坐标比较，未处理多显示器负坐标与任务栏偏移；`load_window_position()` 仅在 `__main__`(166) 中调用，若把窗口类作为库导入则不会恢复位置。
-  - **多进程启动方式**：`set_start_method("spawn")`(157) 只在脚本入口执行，其它入口或测试直接实例化窗口时不会设置，Windows 下派生进程可能异常。
-  - **Ctrl+C 处理**：`keyPressEvent`(146-153) 只在主线程生效且不主动通知子进程，子进程清理实际依赖 `closeEvent` 的 `terminate_all()`(103)。
-
----
+  - 主题跟随相关代码已整体注释：`setTheme/setThemeColor`（39-40）、`SystemThemeListener` 初始化与启动（43-44）、退出清理（101-102）；云母效果以 `setMicaEffectEnabled(False)` 强制关闭（37）。当前主题逻辑实际未启用，勿误以为在运行。
+  - `navigationInterface.panel.minimumExpandWidth = 999999`（46）用于"任何尺寸下悬浮展开、防止窗口撑大"，改动导航行为时需保留该约束。
+  - `switchTo` 中的 222ms / 666ms 硬编码延时是针对 macOS 滚动区问题的两次补偿（93-95），调整界面加载流程时需回归验证。
+  - 多进程使用 `spawn` 启动方式（157），与 Windows 平台一致；若改为 `fork` 会破坏 Windows 兼容与子进程资源隔离。
+  - `windowX/Y/W/H` 默认宽高均为 1200（config.py:44-45），`load_window_position` 以 `not x or not y` 判断首次启动（122），坐标为 0 时会被视为无效并居中。
+  - 图标 `design/vse.ico` 为相对路径，依赖启动时的工作目录为项目根。
 
 ### backend/__init__.py
-- **路径**：`backend/__init__.py`
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/__init__.py`
 - **规模**：3 行
-- **职责**：把 `backend` 标记为 Python 包，并在包被首次导入时把项目根目录下的 `dependencies` 文件夹插到 `sys.path[0]`，使随项目分发的第三方依赖（PaddleOCR 等）优先于系统环境中的同名包被加载。
+- **职责**：包初始化副作用模块。将项目根目录下的 `dependencies` 目录插入 `sys.path[0]`，使捆绑依赖优先于系统同名包被导入。
+
 - **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `sys.path.insert(0, ...)` | 3 | 用 `os.path.abspath(__file__)` 上溯两级得到项目根，拼接 `dependencies` 后插入导入路径首位 |
+|------|------|------|
+| （无类/函数） | 1-3 | `import os, sys`；`sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'dependencies'))` |
 
-- **调用关系**：任何 `import backend.*`（如 `backend.config`、`backend.main`）都会先执行本文件；它不导入项目内任何模块，也不被显式 `import backend` 单独调用。
-- **依赖与数据流**：仅依赖标准库 `os`、`sys`；无配置读写、无全局状态（除了对 `sys.path` 的进程级副作用）。
+- **调用关系**：作为 `backend` 包初始化的一部分自动执行；`gui.py` 导入 `backend.config` 时先触发本模块。
+
+- **依赖与数据流**：以 `__file__` 为基准向上两级定位项目根目录（`backend/` 的父目录），拼接子目录名 `dependencies`；无参数、无返回值，纯 `sys.path` 副作用。
+
 - **维护与重构注意点**：
-  - 第 3 行是**全局副作用**：把自定义目录置于 `sys.path[0]` 会覆盖任何同名系统包，排查"为什么导入了错误版本的库"时必须先看这里。
-  - 依赖目录名 `dependencies` 硬编码；目录重命名或改为虚拟环境安装后此行应删除，否则可能遮蔽正常安装的包。
-  - 无文件编码声明但内容均为 ASCII，无碍；文件无 docstring，建议补一行说明其副作用。
-  - Python 模块只初始化一次，正常不会重复插入；但若手动 `importlib.reload(backend)` 会再次插入重复项。
-
----
+  - 插入到 `sys.path[0]` 会**遮蔽**系统同名包，`dependencies` 内容变更将影响全局导入解析，排查导入异常时需首先确认此处。
+  - 路径计算依赖固定的目录层级（`backend/` 直接位于项目根下）；移动该文件位置必须同步调整向上级数。
+  - 不应在本模块加入业务逻辑或重依赖导入，以免放大所有 `backend.*` 导入的副作用与循环依赖风险。
 
 ### backend/config.py
-- **路径**：`backend/config.py`
-- **规模**：113 行
-- **职责**：全局配置中心。定义版本号/项目 URL/更新源/硬件加速默认值等常量，维护多语言 `tr` 字典，声明 `Config(QConfig)` 中的全部配置项，从 `config/config.json` 加载到单例 `config` 并导出，最后设置 `BASE_DIR` 与 `KMP_DUPLICATE_LIB_OK` 环境变量。UI 设置卡片与 OCR 后端都通过该单例读写配置。
-- **关键类/函数/模块级对象**：
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/config.py`
+- **规模**：120 行
+- **职责**：全局配置与元信息中心。定义版本/项目 URL/更新源、全局翻译对象 `tr`、`QConfig` 子类 `Config`（32 项配置）、配置文件加载、`BASE_DIR` 与 `KMP_DUPLICATE_LIB_OK` 环境变量。
+
+- **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `VERSION` | 10 | `"2.2.0"`，`gui.py:49` 拼入窗口标题 |
-| `PROJECT_HOME_URL` / `PROJECT_ISSUES_URL` / `PROJECT_RELEASES_URL` | 11-13 | 指向 YaoFANGUK 原仓库 |
-| `PROJECT_UPDATE_URLS` | 14-17 | 两个更新检查 API（GitHub + 加速镜像） |
-| `HARDWARD_ACCELERATION_OPTION` | 19 | `True`，`hardwareAcceleration` 的默认值（注意拼写 HARDWARD） |
-| `tr`（首次初始化） | 22-25 | 读 `backend/interface/en.ini`，供第 52 行 `language` 的 validator 取得语言选项 |
-| `Config(QConfig)` | 27-98 | 全部配置项的类属性定义 |
-| `intefaceTexts` | 29-38 | 界面语言显示名→代码的映射字典（注意拼写 inteface） |
-| `CONFIG_FILE` | 100 | `'config/config.json'`（相对当前工作目录的路径） |
-| `config = Config()` | 101 | 全局单例 |
-| `qconfig.load(CONFIG_FILE, config)` | 102 | 从文件加载值到单例；文件缺失时沿用代码默认值 |
-| `tr`（重新初始化） | 105-108 | 按 `config.interface.value` 重新读取对应 `.ini` |
-| `BASE_DIR` | 111 | `backend` 目录的绝对路径字符串 |
-| `os.environ['KMP_DUPLICATE_LIB_OK']` | 113 | 设为 `'True'`，规避 OpenMP 重复加载崩溃 |
+|------|------|------|
+| `VERSION` | 10 | 版本号 `"2.2.0"`，用于窗口标题与更新比对 |
+| `PROJECT_HOME_URL` / `PROJECT_ISSUES_URL` / `PROJECT_RELEASES_URL` | 11-13 | 项目主页、Issues、Releases 地址 |
+| `PROJECT_UPDATE_URLS` | 14-17 | 两个更新源（GitHub API + 加速镜像） |
+| `HARDWARD_ACCELERATION_OPTION` | 19 | 硬件加速总开关常量 `True`，**拼写保留**；作为 `hardwareAcceleration` 默认值，并被 UI 层读取 |
+| `tr`（首次初始化） | 22-25 | 读取 `interface/en.ini`，为语言选项构建提供默认翻译 |
+| `Config` | 27-105 | `QConfig` 子类，集中声明 32 项配置 |
+| `intefaceTexts` | 29-38 | 界面语言显示名→代码映射（**拼写保留**：`intefaceTexts`） |
+| `CONFIG_FILE` | 107 | 配置文件路径 `"config/config.json"` |
+| `config` | 108 | `Config()` 单例 |
+| `qconfig.load(...)` | 109 | 从 `config.json` 载入已保存配置（缺失键回退默认值） |
+| `tr`（重载） | 112-115 | 按 `config.interface.value` 加载对应 `interface/{value}.ini` |
+| `BASE_DIR` | 118 | `backend` 目录绝对路径字符串 |
+| `KMP_DUPLICATE_LIB_OK` | 120 | 设为 `'True'`，规避 OpenMP 运行库重复加载冲突 |
 
-- **全部 QConfig 配置项（默认值 / 含义 / UI 暴露 / 后端是否读取）**：
+- **QConfig 全量项（32 项，全部被读取）**：
 
-| 配置项（定义行） | 组/键 | 类型与默认值 | 含义 | UI 暴露位置 | 后端是否读取 |
-|---|---|---|---|---|---|
-| `interface` (39) | Window/Interface | `OptionsConfigItem`，默认 `"ChineseSimplified"`，validator 取 `intefaceTexts.values()`（`ch`/`chinese_cht`/`en`/`ko`/`japan`/`vi`/`es`/`tr`），`restart=True` | 界面显示语言 | `ui/setting_interface.py:18` ComboBox（LANGUAGE） | 否（OCR 后端不读；`config.py:107` 自身用它选 ini） |
-| `windowX` (42) | Window/X | `ConfigItem`，默认 `None` | 窗口左上角 X | 无设置卡片；由 `gui.py:109,117` 写/读 | 否（仅主窗口生命周期） |
-| `windowY` (43) | Window/Y | `ConfigItem`，默认 `None` | 窗口左上角 Y | 无；`gui.py:110,118` | 否 |
-| `windowW` (44) | Window/Width | `ConfigItem`，默认 `1200` | 窗口宽度 | 无；`gui.py:111,119` | 否 |
-| `windowH` (45) | Window/Height | `ConfigItem`，默认 `1200` | 窗口高度 | 无；`gui.py:112,120` | 否 |
-| `subtitleSelectionAreas` (49) | Main/SubtitleSelectionAreas | `ConfigItem`，默认 `"0.78,0.99,0.05,0.95"` | 归一化选区串 `ymin,ymax,xmin,xmax;...`，分号分隔多个 | `ui/component/video_display_component.py:729,794-805`（选区绘制/持久化，非设置卡片） | 否（选区经任务参数下发，后端不直接读此键） |
-| `language` (52) | Main/Language | `OptionsConfigItem`，默认 `"ch"`，validator 取 `tr["Language"]` 的键（en.ini 中为大写 `CH`/`EN`/...） | 字幕识别语言 | `ui/setting_interface.py:29` ComboBox（FONT） | 是：`backend/main.py:116,191,1039`；`backend/tools/paddle_model_config.py:9` |
-| `mode` (54) | Main/Mode | `OptionsConfigItem`，默认 `"fast"`，选项 `auto`/`fast`/`accurate` | 识别模式 | `ui/setting_interface.py:40` ComboBox（SETTING） | 是：`backend/main.py:116,143`；`paddle_model_config.py:120-121` |
-| `generateTxt` (56) | Main/GenerateTxt | `ConfigItem`，默认 `False`，`BoolValidator` | 是否额外输出 TXT | `ui/setting_interface.py:66` Switch（DOCUMENT） | 是：`backend/main.py:200` |
-| `recBatchNumber` (58) | Main/RecBatchNumber | `RangeConfigItem`，默认 `6`，范围 1-100 | 每张图同时识别的文本框数 | `ui/advanced_setting_interface.py:92` RangeSettingCard | 否（全仓库仅 UI 引用，未接入后端，疑似失效配置） |
-| `maxBatchSize` (60) | Main/MaxBatchSize | `RangeConfigItem`，默认 `10`，范围 1-256 | DB 检测每 batch 图片数 | `ui/advanced_setting_interface.py:100` RangeSettingCard | 否（同上） |
-| `subtitleArea` (62) | Main/SubtitleArea | `OptionsConfigItem`，默认 `SubtitleArea.UNKNOWN`（constant.py 枚举），`OptionsValidator` + `EnumSerializer` | 字幕大致出现区域（预设枚举） | `ui/advanced_setting_interface.py:108` ComboBox | 是：`backend/main.py:257,372,384,425,450`；`subtitle_ocr.py:289,294` |
-| `extractFrequency` (64) | Main/ExtractFrequency | `RangeConfigItem`，默认 `3`，范围 1-60 | 每秒抽帧数 | `ui/advanced_setting_interface.py:117` RangeSettingCard | 是：`backend/main.py:243`（`frame_interval = fps // value`） |
-| `tolerantPixelY` (66) | Main/TolerantPixelY | `RangeConfigItem`，默认 `50`，范围 1-1000 | 纵向容差像素 | `ui/advanced_setting_interface.py:125` RangeSettingCard | 是：`backend/main.py:961-962` |
-| `tolerantPixelX` (67) | Main/TolerantPixelX | `RangeConfigItem`，默认 `100`，范围 1-1000 | 横向容差像素 | `ui/advanced_setting_interface.py:132` RangeSettingCard | 是：`backend/main.py:870,959-960` |
-| `subtitleAreaDeviationPixel` (69) | Main/SubtitleAreaDeviationPixel | `RangeConfigItem`，默认 `50`，范围 1-1000 | 字幕区域像素偏移 | `ui/advanced_setting_interface.py:140` RangeSettingCard | 是：`backend/main.py:605-606` |
-| `waterarkAreaNum` (71) | Main/WaterarkAreaNum | `RangeConfigItem`，默认 `5`，范围 1-10 | 最可能的水印区域数（名称拼写 waterark） | `ui/advanced_setting_interface.py:148` RangeSettingCard | 是：`backend/main.py:720` |
-| `thresholdTextSimilarity` (76) | Main/ThresholdTextSimilarity | `RangeConfigItem`，默认 `80`，范围 0-100 | 文本相似度阈值（使用时 /100） | `ui/advanced_setting_interface.py:156` RangeSettingCard | 是：`backend/main.py:792,948` |
-| `dropScore` (78) | Main/DropScore | `RangeConfigItem`，默认 `75`，范围 0-100 | 置信度阈值（/100 传入 OCR） | `ui/advanced_setting_interface.py:164` RangeSettingCard | 是：`backend/main.py:1040` |
-| `subtitleAreaDeviationRate` (80) | Main/SubtitleAreaDeviationRate | `RangeConfigItem`，默认 `0`，范围 0-100 | 区域越界比例（/100） | `ui/advanced_setting_interface.py:172` RangeSettingCard | 是：`backend/main.py:1041` |
-| `debugOcrLoss` (82) | Main/DebugOcrLoss | `ConfigItem`，默认 `False`，`BoolValidator` | 输出丢失字幕的调试信息 | `ui/advanced_setting_interface.py:214` Switch | 是：`backend/main.py:1042` |
-| `debugNoDeleteCache` (84) | Main/DebugNoDeleteCache | `ConfigItem`，默认 `False`，`BoolValidator` | 保留缓存便于调试 | `ui/advanced_setting_interface.py:222` Switch | 是：`backend/main.py:984` |
-| `deleteEmptyTimeStamp` (86) | Main/DeleteEmptyTimeStamp | `ConfigItem`，默认 `True`，`BoolValidator` | 删除空时间轴 | `ui/advanced_setting_interface.py:230` Switch | 是：`backend/main.py:676` |
-| `wordSegmentation` (88) | Main/WordSegmentation | `ConfigItem`，默认 `True`，`BoolValidator` | 重新分词（处理无空格语句） | `ui/setting_interface.py:76` Switch（EDIT） | 是：`backend/main.py:190` |
-| `hardwareAcceleration` (90) | Main/HardwareAcceleration | `ConfigItem`，默认 `HARDWARD_ACCELERATION_OPTION`(True)，`BoolValidator` | 硬件加速开关 | `ui/setting_interface.py:51` Switch（SPEED_HIGH）；59-62 在总开关为假时强制写回 False 并禁用 | 是：`backend/main.py:53` |
-| `checkUpdateOnStartup` (92) | Main/CheckUpdateOnStartup | `ConfigItem`，默认 `True`，`BoolValidator` | 启动时检查更新 | `ui/advanced_setting_interface.py:189` Switch | 否（由 `gui.py:57` 前端消费） |
-| `saveDirectory` (94) | Main/SaveDirectory | `ConfigItem`，默认 `""`，`ConfigValidator` | 输出目录，空表示视频所在目录 | `ui/advanced_setting_interface.py:179-186` PushSettingCard（`choose_save_directory` 304-313） | 否（仅前端：`ui/component/task_list_component.py:44`） |
-| `videoSubFinderCpuCores` (96) | Main/VideoSubFinderCpuCores | `RangeConfigItem`，默认 `0`，范围 `0..os.cpu_count()` | VSF CPU 核心数，0 为自动 | `ui/advanced_setting_interface.py:197` RangeSettingCard | 是：`backend/main.py:484-485` |
-| `videoSubFinderDecoder` (98) | Main/VideoSubFinderDecoder | `OptionsConfigItem`，默认 `VideoSubFinderDecoder.OPENCV`，`OptionsValidator` + `EnumSerializer` | VSF 视频解码组件 | `ui/advanced_setting_interface.py:205` ComboBox | 是：`backend/main.py:490,509`（取 `.value.lower()` 拼命令行） |
+  "UI 暴露"列依据 `ui/setting_interface.py` 与 `ui/advanced_setting_interface.py` 中的 `configItem=` 引用核对；窗口坐标四项无独立设置卡片，由 `gui.py` 内部读写；`subtitleSelectionAreas` 由 `ui/component/video_display_component.py` 的选区绘制间接写入。"后端读取"列：32 项均被项目代码读取。
 
-- **依赖与数据流**：`tr` 被初始化两次——第 22-25 行先加载 `en.ini`，目的是让第 52 行 `language` 的 validator 能枚举语言；第 102 行加载用户配置后，第 105-108 行再按 `config.interface.value` 重新加载对应语言文件，此后 `gui.py` 与各 UI 使用的 `tr` 才是最终语言。`Config` 没有自定义 `__init__`，全部是类属性，`qconfig.load` 就地修改各 `ConfigItem.value`。当前磁盘上 `config/` 目录不存在（即 `config/config.json` 尚未生成），因此 `qconfig.load`(102) 会沿用代码内的默认值。
+| # | 配置项 | 类型 | 默认值 | 含义 | UI 暴露 | 后端读取 |
+|---|--------|------|--------|------|---------|----------|
+| 1 | `interface` | OptionsConfigItem | `"ChineseSimplified"` | 界面语言，`restart=True`；validator 选项为 `intefaceTexts.values()`（ch/chinese_cht/en/ko/japan/vi/es/tr） | 是（setting_interface.py:18 `interface_combo`） | 是（config.py:114 自身用于选择 ini） |
+| 2 | `windowX` | ConfigItem | `None` | 窗口 X 坐标（持久化内部状态） | 否（gui.py 内部） | 是（gui.py:117/109） |
+| 3 | `windowY` | ConfigItem | `None` | 窗口 Y 坐标 | 否（gui.py 内部） | 是（gui.py:118/110） |
+| 4 | `windowW` | ConfigItem | `1200` | 窗口宽度 | 否（gui.py 内部） | 是（gui.py:119/111） |
+| 5 | `windowH` | ConfigItem | `1200` | 窗口高度 | 否（gui.py 内部） | 是（gui.py:120/112） |
+| 6 | `subtitleSelectionAreas` | ConfigItem | `"0.78,0.99,0.05,0.95"` | 选区集合字符串，格式 `ymin,ymax,xmin,xmax;...`，分号分隔 | 间接（video_display_component.py:729/803-806 绘制写入） | 是 |
+| 7 | `language` | OptionsConfigItem | `"ch"` | 字幕识别语言，选项取自 `tr["Language"]` | 是（setting_interface.py:25 `language_combo`） | 是 |
+| 8 | `mode` | OptionsConfigItem | `"fast"` | 抽帧/识别模式 `auto/fast/accurate` | 是（setting_interface.py:33 `mode_combo`） | 是 |
+| 9 | `generateTxt` | ConfigItem(Bool) | `False` | 是否生成 TXT 文本字幕 | 是（setting_interface.py:82） | 是 |
+| 10 | `recBatchNumber` | RangeConfigItem | `6` | 单张图同时识别的文本框数，范围 1-100 | 是（advanced_setting_interface.py:92） | 是 |
+| 11 | `maxBatchSize` | RangeConfigItem | `10` | DB 检测每个 batch 的图片数，范围 1-256 | 是（advanced_setting_interface.py:100） | 是 |
+| 12 | `subtitleArea` | OptionsConfigItem(Enum) | `SubtitleArea.UNKNOWN` | 字幕大致区域枚举，Enum 序列化 | 是（advanced_setting_interface.py:108） | 是 |
+| 13 | `extractFrequency` | RangeConfigItem | `3` | 每秒抽帧进行 OCR 的帧数，范围 1-60 | 是（advanced_setting_interface.py:117） | 是 |
+| 14 | `tolerantPixelY` | RangeConfigItem | `50` | 容忍的 Y 像素偏差，范围 1-1000 | 是（advanced_setting_interface.py:125） | 是 |
+| 15 | `tolerantPixelX` | RangeConfigItem | `100` | 容忍的 X 像素偏差，范围 1-1000 | 是（advanced_setting_interface.py:132） | 是 |
+| 16 | `subtitleAreaDeviationPixel` | RangeConfigItem | `50` | 字幕区域偏移量（像素），范围 1-1000 | 是（advanced_setting_interface.py:140） | 是 |
+| 17 | `waterarkAreaNum` | RangeConfigItem | `5` | 最可能出现的水印区域数量，范围 1-10（拼写 `waterark` 保留） | 是（advanced_setting_interface.py:148） | 是 |
+| 18 | `thresholdTextSimilarity` | RangeConfigItem | `80` | 文本相似度阈值 0-100，值越高越严格（动态算法：短文本低阈值、长文本高阈值） | 是（advanced_setting_interface.py:156） | 是 |
+| 19 | `dropScore` | RangeConfigItem | `75` | 置信度阈值 0-100，低于该值（75→0.75）的字幕丢弃 | 是（advanced_setting_interface.py:164） | 是 |
+| 20 | `subtitleAreaDeviationRate` | RangeConfigItem | `0` | 字幕区域允许越界比例 0-100，0 表示不允许越界 | 是（advanced_setting_interface.py:172） | 是 |
+| 21 | `debugOcrLoss` | ConfigItem(Bool) | `False` | 输出丢失的字幕帧调试信息（仅简/繁中、日、韩有效，输出到 `视频路径/loss`） | 是（advanced_setting_interface.py:214） | 是 |
+| 22 | `debugNoDeleteCache` | ConfigItem(Bool) | `False` | 不删除缓存数据以便调试 | 是（advanced_setting_interface.py:222） | 是 |
+| 23 | `deleteEmptyTimeStamp` | ConfigItem(Bool) | `True` | 是否删除空时间轴 | 是（advanced_setting_interface.py:230） | 是 |
+| 24 | `wordSegmentation` | ConfigItem(Bool) | `True` | 是否重新分词，用于解决语句无空格 | 是（setting_interface.py:88） | 是 |
+| 25 | `ocrBackend` | OptionsConfigItem | `"auto"` | OCR 执行后端：`auto`（DML 优先）/ `cpu` / `dml` | 是（setting_interface.py:40 `backend_combo`） | 是 |
+| 26 | `modelTier` | OptionsConfigItem | `"precise"` | OCR 模型档位：`light`（tiny rec）/ `precise`（small rec） | 是（setting_interface.py:48 `tier_combo`） | 是 |
+| 27 | `dmlDeviceId` | OptionsConfigItem | `""` | 指定 DML 设备索引；`''` 表示自动选择，预置 `'0'`..`'7'` 覆盖多 GPU | 是（setting_interface.py:63 `device_combo`） | 是 |
+| 28 | `hardwareAcceleration` | ConfigItem(Bool) | `HARDWARD_ACCELERATION_OPTION`（`True`） | 硬件加速总开关；关闭时强制走 CPU | 是（setting_interface.py:71） | 是 |
+| 29 | `checkUpdateOnStartup` | ConfigItem(Bool) | `True` | 启动时检查应用更新 | 是（advanced_setting_interface.py:189） | 是（gui.py:57） |
+| 30 | `saveDirectory` | ConfigItem | `""` | 视频保存目录，`ConfigValidator` | 是（advanced_setting_interface.py:183/306-313） | 是 |
+| 31 | `videoSubFinderCpuCores` | RangeConfigItem | `0` | VideoSubFinder CPU 核心数，范围 0-`os.cpu_count()` | 是（advanced_setting_interface.py:197） | 是 |
+| 32 | `videoSubFinderDecoder` | OptionsConfigItem(Enum) | `VideoSubFinderDecoder.OPENCV` | VideoSubFinder 视频解码组件枚举（OpenCV/FFmpeg），Enum 序列化 | 是（advanced_setting_interface.py:205） | 是 |
+
+- **调用关系**：被全项目广泛导入。`gui.py` 使用 `config / tr / VERSION`；`ui/setting_interface.py` 使用 `config / tr / HARDWARD_ACCELERATION_OPTION` 并绑定新增三项后端配置；`ui/advanced_setting_interface.py` 与 `ui/component/*` 读取/写入各项配置；后端 OCR 与预处理逻辑读取 `.value` 决定行为。
+
+- **依赖与数据流**：
+  - qfluentwidgets 提供 `QConfig / ConfigItem / OptionsConfigItem / RangeConfigItem / BoolValidator / OptionsValidator / RangeValidator / EnumSerializer / ConfigValidator / qconfig`。
+  - `backend.tools.constant` 提供 `SubtitleArea`、`VideoSubFinderDecoder` 两个枚举，用于 validator 与序列化（6）。
+  - `tr` 经历"两次加载"：先在 22-25 行读入 `interface/en.ini` 以构建语言 validator 选项，再在 108 行 `config` 实例化并 `qconfig.load` 后，于 112-115 行按 `config.interface.value` 重载对应语言 ini。
+  - `HARDWARD_ACCELERATION_OPTION` 同时作为 `hardwareAcceleration` 默认值（97）与 UI 强制关闭依据（setting_interface.py:75-78，当其为假时禁用开关并 `config.set(..., False)`）。
+  - `BASE_DIR` 供资源定位；`KMP_DUPLICATE_LIB_OK` 规避 OpenMP 冲突。
+
 - **维护与重构注意点**：
-  - **高风险默认值**：`interface` 默认 `"ChineseSimplified"`(39) 既不在 `intefaceTexts.keys()`（中文显示名）也不在 `values()`（`ch` 等）中；而 `backend/interface/` 下实际只有 `ch/chinese_cht/en/japan/ko/tr/vi/es.ini`，无 `ChineseSimplified.ini`。在当前无 `config/config.json` 的情况下，第 107 行会指向不存在的文件，第 108 行读不到内容，后续 `tr[...]` 访问将 `KeyError`。应确认打包/首次启动流程是否生成配置文件，否则把默认值改为 `ch` 并增加"文件不存在时回退 en.ini"的保护。
-  - **语言大小写不一致**：`language` 的 validator 选项来自 ini 的键（`en.ini:79-` 为大写 `CH`/`EN`/`JAPAN`/...），而默认值及 `main.py:1039` 传给 PaddleOCR 的值是小写 `ch`/`en`/`japan`。设置界面按 validator 选项写入后可能产生大写值，导致模型路径/识别参数不匹配；需核对 qfluentwidgets 的映射行为并统一大小写。
-  - **死配置项**：`recBatchNumber`(58) 与 `maxBatchSize`(60) 只有设置卡片、无任何后端读取；应接入 PaddleOCR 初始化参数，或从 UI 与配置文件中移除。
-  - **命名错误**：`waterarkAreaNum`(71)、`intefaceTexts`(29)、`HARDWARD_ACCELERATION_OPTION`(19) 拼写有误；重命名须同步 `config/config.json` 中的历史键与 UI 引用，否则用户旧配置失效。
-  - **重启语义不一致**：仅 `interface`(39) 设置 `restart=True`；`language`/`mode`/`videoSubFinderDecoder`/`hardwareAcceleration` 等改变后会影响已初始化的模型或子进程，但可热切换，存在运行期不一致风险。
-  - **更新源指向原仓**：`PROJECT_*`(11-17) 全部指向 `YaoFANGUK/video-subtitle-extractor`，本仓库是二次改写分支，更新检查可能提示版本异常或覆盖本地改动。
-  - **路径与可移植性**：`CONFIG_FILE = 'config/config.json'`(100) 相对当前工作目录，与 `BASE_DIR`(111) 无关；工作目录改变会读写到错误位置。
-  - **`videoSubFinderCpuCores` 上界**(96) 在导入时用 `os.cpu_count()` 求值，容器迁移/CPU 热变更后不会刷新；极端环境下上界为 0 时合法值仅 0。
-  - `os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'`(113) 是绕过 OpenMP 重复链接的全局开关，会掩盖真实的库冲突；重构依赖时应优先消除冲突再删除该行。
-  - 第 1 行为空行、`tr` 两次赋值(22 与 105) 属历史演进痕迹，阅读时容易误判为重复代码。
+  - 新增/删除配置项必须在此类中声明，并保持 `qconfig.load` 对旧 `config.json` 的兼容（缺失键回退默认值）；32 项当前全部被读取，删除任一项前需确认无引用。
+  - `HARDWARD_ACCELERATION_OPTION`（19）、`intefaceTexts`（29）、`waterarkAreaNum`（71）三处拼写为历史遗留且被外部引用（前者被 UI 导入），重命名会破坏兼容，应保留。
+  - `interface` 默认值 `"ChineseSimplified"`（39）与 validator 选项 `intefaceTexts.values()`（ch/chinese_cht/en/...）不一致，排查语言选择异常时需关注此处；`tr` 的两次加载顺序决定了 validator 选项内容，调整顺序会影响语言下拉项。
+  - 新增的 `ocrBackend / modelTier / dmlDeviceId` 三项的 validator 选项必须与 UI 展示文本（setting_interface.py:40-67）及后端分支处理保持同步：`dmlDeviceId` 选项固定为 `['', '0'..'7']`，UI 侧用 `env_check.list_dml_devices()` 动态生成设备名，但索引选项仍需与 validator 对齐；`modelTier` 默认 `precise`。
+  - `hardwareAcceleration` 是后端选择的**总开关**：关闭时无论 `ocrBackend` 为何值都强制 CPU，UI 层通过 `HARDWARD_ACCELERATION_OPTION` 还可整体禁用该开关。
+  - 当前仅 Windows + CPU/DML 两后端、OCR 走 onnxruntime + PP-OCRv6 ONNX：引入新后端或替换推理引擎时，需同步维护本处配置项、UI 选项、依赖文件（`requirements*.txt`）与后端分支。
+  - `tr` 是模块级可变全局对象，重复 `read` 会合并/覆盖内容；`Config` 实例 `config` 为进程内单例，配置变更需经 `config.set` / `qconfig.save` 才会持久化。
+
+### backend/bean/subtitle_area.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/bean/subtitle_area.py`
+- **规模**：55 行
+- **职责**：定义字幕选区数据类 `SubtitleArea`，承载归一化/绝对坐标、A-B 帧区间、尺寸计算与几何（Polygon）转换。
+
+- **关键类/函数**：
+
+| 名称 | 行号 | 说明 |
+|------|------|------|
+| `SubtitleArea` | 6-55 | `@dataclass`，字段 `ymin/ymax/xmin/xmax`（Union[int,float]）与 `ab_section: range = None` |
+| `__init__` | 18-25 | 显式构造，赋值五个字段；`ab_section` 默认 `None` |
+| `normalized` | 27-31 | 交换坐标使 `xmin<=xmax`、`ymin<=ymax` |
+| `is_empty` | 33-34 | 四坐标全为 0 时返回 `True` |
+| `width` | 36-38 | `@property`，返回 `xmax - xmin` |
+| `height` | 40-42 | `@property`，返回 `ymax - ymin` |
+| `in_ab_section` | 44-52 | `ab_section is None` 时恒为 `True`（全帧有效）；否则判断 `frame_idx in ab_section` |
+| `to_polygon` | 54-55 | 返回由四点构成的 `shapely.geometry.Polygon` |
+
+- **调用关系**：供字幕区域处理与 UI 视频显示组件使用（构造选区实例并调用 `normalized / is_empty / in_ab_section / to_polygon`）；依赖外部库 `shapely.geometry.Polygon`（4）。注意与 `backend/tools/constant.py` 中的同名 `SubtitleArea` **枚举**是完全不同的两个类型，导入时需区分。
+
+- **依赖与数据流**：`typing.Union`、`dataclasses.dataclass`、`shapely.geometry.Polygon`。实例通常由 `config.subtitleSelectionAreas` 的字符串（`"ymin,ymax,xmin,xmax;..."`，见 config.py:49）解析构造；`ab_section`（range）用于限定选区生效的帧范围。
+
+- **维护与重构注意点**：
+  - 字段顺序 `ymin,ymax,xmin,xmax` 与 `config.subtitleSelectionAreas` 的字符串顺序一致，解析时必须保持，否则坐标语义错位。
+  - `ab_section=None` 表示选区对所有帧有效（44-52 文档已明确），`range` 才做区间过滤；新增分区语义时必须同步更新 `in_ab_section`。
+  - 类标注为 `@dataclass` 但同时手写 `__init__`（18-25），dataclass 不会覆盖手写构造；新增字段需同时修改类注解与 `__init__`，否则默认值/赋值不一致。
+  - `to_polygon` 依赖 shapely，部署环境必须包含该依赖；坐标为绝对值还是归一化比例由调用方决定，本类不做判定，跨模块传递时需统一语义。
+  - `normalized`（27-31）原地修改实例而非返回新对象，调用前需注意副作用。
+
+### backend/tools/constant.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/constant.py`
+- **规模**：30 行
+- **职责**：定义核心枚举与 BGR 颜色常量，供配置校验/序列化及图像绘制使用。
+
+- **关键类/函数**：
+
+| 名称 | 行号 | 说明 |
+|------|------|------|
+| `SubtitleArea` | 5-11 | Enum：`LOWER_PART=0` / `UPPER_PART=1` / `UNKNOWN=2`（`CUSTOM=3` 已注释，13） |
+| `BackgroundColor` | 16-20 | Enum：`WHITE=0` / `DARK=1` / `UNKNOWN=2` |
+| `VideoSubFinderDecoder` | 23-25 | Enum：`OPENCV="OpenCV"` / `FFMPEG="FFmpeg"` |
+| `BGR_COLOR_GREEN` | 27 | `(0, 0xff, 0)` |
+| `BGR_COLOR_BLUE` | 28 | `(0xff, 0, 0)` |
+| `BGR_COLOR_RED` | 29 | `(0, 0, 0xff)` |
+| `BGR_COLOR_WHITE` | 30 | `(0xff, 0xff, 0xff)` |
+
+- **调用关系**：被 `backend/config.py:6` 导入 `SubtitleArea`、`VideoSubFinderDecoder`，用于 `OptionsValidator` 与 `EnumSerializer`（config.py:62/105）；颜色常量供图像标注/绘制模块使用。
+
+- **依赖与数据流**：仅依赖标准库 `enum.Enum`；无 I/O、无外部服务；全部为模块级不可变定义。
+
+- **维护与重构注意点**：
+  - 本模块的 `SubtitleArea` 是枚举，与 `backend/bean/subtitle_area.py` 的数据类同名不同类型，导入路径不同，重构时切勿混用。
+  - 两个用于配置的枚举经 `EnumSerializer` 按**成员名**持久化到 `config.json`（`subtitleArea` 默认 `UNKNOWN`、`videoSubFinderDecoder` 默认 `OPENCV`）；重命名成员会使旧配置失效，新增成员需同步 UI 选项文本。
+  - `VideoSubFinderDecoder` 的成员值为字符串（`"OpenCV"`/`"FFmpeg"`），与界面展示文本对应；调整值需同步 `ui/advanced_setting_interface.py:205` 的卡片文本来源。
+  - 颜色常量为 **BGR** 顺序（OpenCV 约定），非 RGB；绘制或转换色彩空间时勿颠倒通道。
+  - `CUSTOM=3` 目前被注释（13），若后续启用需同步 `config.py`、`setting_interface.py` / `advanced_setting_interface.py` 的选项与序列化处理。
+
+## 二、核心引擎 backend/main.py
+
+（概览）`backend/main.py` 是 VSE 硬字幕提取器的**核心编排引擎**（当前磁盘最终代码共 **1073 行**），只定义唯一业务类 `SubtitleExtractor`。它把「视频帧采样 → OCR 识别 → 字幕去重/过滤 → SRT 生成」整条流水线串起来：主进程按三种策略之一（fps 跳帧采样 / det 逐帧检测比对 / 调用 Windows 版 videoSubFinder）向任务队列投喂帧，OCR 在独立子进程中经 `multiprocessing.Queue` 异步消费，主进程再通过监听器回调把三段进度（抽帧 100 + OCR 100 + 后处理 100 = 300）回传给 UI，整体是「生产者—消费者 + 多进程 + 回调通知」的异步架构。
+
+接手人需特别注意当前最终状态：`run()` 用 `try/finally` 保证锁释放；无 stdin 的交互统一由 `_safe_input()` 兜底为返回空串；`accurate` 模式始终走 VSE 自研逐帧检测，其余模式与有选区场景走 VideoSubFinder；`manage_process(self, pid)` 是实例方法但为**空实现**（GUI 侧用猴子补丁替换）；坐标容差统一使用 `config.tolerantPixelX/Y.value`；缩略图缩放使用 `Image.Resampling.LANCZOS`；OCR 后端的模型解析已完全交给 daemon/ocr 子进程，**本文件不再持有任何模型配置对象**（无 `paddle_model_config` 导入、无 `self.model_config` 属性）。运行环境与抽帧路径**仅支持 Windows**：VSF 可执行文件固定为 `VideoSubFinderWXW.exe`，命令行无 `--use_cuda`，进度由单线程 `count_process()` 扫描 RGBImages 文件名推进。
+
+### 模块导入与全局结构
+
+- **导入清单**（按来源分组，括号为导入语句所在行号）：
+  - 标准库：
+    - `os`(8)、`shutil`(11)、`pathlib.Path`(16)、`sys`(22)：路径拼装、目录删除；第 24 行 `sys.path.insert(0, os.path.dirname(__file__))` 把 `backend/` 加入模块搜索路径供子进程导入；`tqdm` 以 `sys.__stdout__`(272) 为输出流。
+    - `re`(9)：`extract_frame_by_vsf` 内 `count_process()` 用正则 `^\d+_\d+_\d+_\d+__`(397) 解析 VSF 输出帧文件名的时间戳。
+    - `random`(10)：`filter_watermark` / `filter_scene_text` 随机抽取预览帧（第 472、533 行）。
+    - `traceback`(12)：`notify_progress_listeners` 捕获监听器异常并打印堆栈（第 1052 行）。
+    - `from collections import Counter, namedtuple`(13)：`Counter` 统计水印/字幕区域频率（第 659、678 行），`namedtuple('RawInfo', 'no content')`(708) 承载去重中间结构；`OrderedDict` 在 `_concat_content_with_same_frameno` 内局部导入（第 761 行）。
+    - `unicodedata`(14)：`_concat_content_with_same_frameno` 用 `NFKC` 归一化合并后文本（第 777 行）。
+    - `from threading import Thread`(15) 与 `import threading`(35)：`threading.RLock()`(47) 保护 `run()`；`Thread` 启动 VSF 的 `count_process` 进度线程(452) 与 OCR 进度监听线程(993)。
+    - `multiprocessing`(37)：入口设 `spawn` 启动方式(1059)、`cpu_count()` 计算 VSF 线程数(442)。
+    - `subprocess`(25)：`extract_frame_by_vsf` 启动外部 VSF 进程(453)，使用 `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP`(455)。
+    - `time`(37)：`time.time()` 记录耗时(107、187)，`time.sleep(0.2)` 用于 VSF 轮询(399)。
+    - `pysrt`(38)：VSF 字幕生成与 srt→txt 导出（第 597、623、997 行）。
+    - `platform`(35)：**当前为遗留死导入**——全文仅此一处出现，抽帧分支与 VSF 路径均已不再调用 `platform.system()`，仅 Windows 路径存活，可安全删除（见「维护与重构建议」）。
+  - 第三方库：
+    - `cv2`(17)：所有视频帧读取/写入、画框、缩放操作（贯穿全文）。
+    - `from Levenshtein import ratio`(18)：文本相似度判定，用于去重阈值(732) 与 OCR 结果比对(888)。
+    - `from PIL import Image`(19)：`__get_thum` 缩略图(910)，使用 `Image.Resampling.LANCZOS`；该方法当前无调用路径。
+    - `from numpy import average, dot, linalg`(20)：`_compute_image_similarity` 余弦相似度(834、838、842)；该方法当前无调用路径。
+    - `tqdm`(21)：det 抽帧进度条(272)。
+  - 项目内模块（`backend.*`）：
+    - `from backend.config import *`(26)：把 `config`、`tr`、`BASE_DIR` 注入命名空间，是全文配置与翻译字典的唯一来源。
+    - `HardwareAccelerator`(27)：硬件加速单例(50-52)。
+    - `from backend.tools import reformat`(28)：分词后处理 `reformat.execute`(186)。
+    - `from backend.tools.ocr import OcrRecogniser, get_coordinates`(29)：本地 OCR 预测与检测框坐标转换（第 280、293、850、868、872、879 行等）。
+    - `from backend.tools import subtitle_ocr`(30)：OCR 子进程入口 `async_start`(987)。
+    - `ProcessManager`(31)：单例进程管理器，注册外部进程以便退出时统一清理(456、988)。
+    - `SubtitleDetect`(32)：字幕区域检测器，供 `extract_frame_by_det` 使用(54、289)。
+    - `SubtitleArea`（`backend.bean.subtitle_area`，第 33 行）：入口处构造用户选区(1066)。
+
+  > 注：当前版本**没有** `paddle_model_config` / `PaddleModelConfig` 导入，也没有 `self.model_config` 属性；模型档位信息只用于 `run()` 的日志打印（第 123 行），实际模型选择由 OCR 子进程依据 `config` 自行完成。
+
+- **入口**（`if __name__ == '__main__':`，第 1058-1073 行）：
+  - 第 1059 行 `multiprocessing.set_start_method("spawn")`：显式使用 spawn，避免 fork 下 CUDA/SSL 等资源继承问题，配合 OCR 子进程。
+  - 第 1061 行 `input(f"{tr['Main']['InputVideo']}").strip()`：CLI 提示输入视频路径（阻塞）。
+  - 第 1063-1068 行：提示输入字幕区域 `ymin ymax xmin xmax`，`map(int, ...)` 解析并构造 `SubtitleArea(y_min, y_max, x_min, x_max)`；`ValueError` 时 `subtitle_area = None`（走无选区 / fps 抽帧路径）。参数顺序与 `SubtitleArea` 构造签名一致。
+  - 第 1070-1071 行：构造 `se = SubtitleExtractor(video_path)` 并赋值 `se.sub_area = subtitle_area`。
+  - 第 1073 行 `se.run()`：启动整条流水线。
+  - 无 argparse/click，纯交互式 stdin；GUI 侧不通过此入口，而是导入类后手动注入 `sub_area` 与 `manage_process` 回调。
+
+### SubtitleExtractor 类
+
+- **构造参数与初始化属性**（`__init__`，第 45-100 行；唯一构造参数 `vd_path`：视频文件路径）：
+
+| 属性名 | 行号 | 类型 / 默认值 | 用途 |
+| --- | --- | --- | --- |
+| `lock` | 47 | `threading.RLock()` | 保护 `run()` 全流程的互斥锁；`run()` 第 108 行 acquire、第 194 行 finally 中 release |
+| `sub_area` | 49 | `None`，可注入 `SubtitleArea` | 用户指定字幕区域，决定抽帧路径；`None` 表示不指定（走 fps 采样） |
+| `hardware_accelerator` | 50 | `HardwareAccelerator.instance()` 单例 | 探测/配置 GPU 加速 |
+| （加速开关） | 52 | `set_enabled(config.hardwareAcceleration.value)` | 按配置启用/禁用硬件加速，无独立属性名 |
+| `sub_detector` | 54 | `SubtitleDetect()` | 字幕区域检测器，供 `extract_frame_by_det` 使用 |
+| `video_path` | 56 | `vd_path` | 原始视频路径 |
+| `video_cap` | 57 | `cv2.VideoCapture(vd_path)` | 主进程视频句柄；VSF 路径会被置 `None`(391) |
+| `vd_name` | 59 | `Path(video_path).stem` | 视频文件名（不含扩展名），用于临时目录命名 |
+| `temp_output_dir` | 61 | `output/{vd_name}`（基于 `BASE_DIR` 上级） | 所有中间产物根目录 |
+| `frame_count` | 63 | `video_cap.get(CAP_PROP_FRAME_COUNT)`（float） | 视频总帧数 |
+| `fps` | 65 | `video_cap.get(CAP_PROP_FPS)`（float） | 帧率，用于采样间隔与时间码换算 |
+| `frame_height` | 67 | `int(...CAP_PROP_FRAME_HEIGHT)` | 帧高，VSF 归一化坐标用 |
+| `frame_width` | 68 | `int(...CAP_PROP_FRAME_WIDTH)` | 帧宽，VSF 归一化坐标用 |
+| `frame_output_dir` | 70 | `temp_output_dir/frames` | 提取帧目录占位（主路径不直接写帧；VSF 产物在其同级目录） |
+| `subtitle_output_dir` | 72 | `temp_output_dir/subtitle` | 字幕中间文件目录 |
+| `use_vsf` | 74 | `False` | 是否走了 videoSubFinder 路径，决定后续用哪种字幕生成方法 |
+| `vsf_subtitle` | 76 | `subtitle_output_dir/raw_vsf.srt` | VSF 直接产出的原始 SRT |
+| `raw_subtitle_path` | 78 | `subtitle_output_dir/raw.txt` | OCR 子进程产出的原始文本（帧号\t坐标\t文本） |
+| `subtitle_output_path` | 80 | `os.path.splitext(video_path)[0] + '.srt'` | 最终 SRT 输出路径（与视频同名同目录） |
+| `ocr` | 82 | `None` | det 路径本地 OCR 识别器，懒加载为 `OcrRecogniser()`(280、868) |
+| `progress_total` | 84 | `300` | 总进度基数（抽帧100+OCR100+后处理100） |
+| `progress_frame_extract` | 86 | `0` | 抽帧进度（0-100） |
+| `progress_ocr` | 88 | `0` | OCR 识别进度（0-100），由进度监听线程推进 |
+| `progress_post` | 90 | `0` | 后处理进度（0-100） |
+| `isFinished` | 92 | `False` | 完成标志，VSF 轮询线程据此退出(398) |
+| `subtitle_ocr_task_queue` | 94 | `None`，由 `start_subtitle_ocr_async` 赋值(990) | OCR 任务队列（主 → 子进程） |
+| `subtitle_ocr_progress_queue` | 96 | `None`，由 `start_subtitle_ocr_async` 赋值(991) | OCR 进度队列（子进程 → 主） |
+| `vsf_running` | 98 | `False` | VSF 运行标志，控制 `count_process` 循环(398、451、460) |
+| `progress_listeners` | 100 | `[]` | 进度回调监听器列表，由 add/remove 方法维护 |
+
+- **方法逐一详解**：
+
+#### `__init__(vd_path)` — 行号 45-100
+- **职责**：初始化锁、视频句柄、所有路径、进度状态与队列占位。
+- **参数**：`vd_path`（视频文件路径）。
+- **关键步骤**：47 建 RLock；50-52 配置硬件加速；57 打开 `VideoCapture`；63-68 读取帧数/帧率/尺寸；70-80 拼装各路径；84-100 初始化进度与队列字段。
+- **输出副作用**：打开视频文件句柄；无打印、无写盘。
+- **调用者 / 被调用者**：被入口(1070) 或 GUI 调用；内部无其他方法调用。
+- **风险点**：`vd_path` 无效时 `VideoCapture` 静默失败，`frame_count`/`fps` 为 0 或 NaN，后续除零（如 `extract_frame_by_fps` 第 238 行 `self.fps // ...`、第 419 行 `total_ms / self.fps`）需在入口校验；`frame_output_dir` 实际不存帧，命名易误导。
+
+#### `run()` — 行号 102-196
+- **职责**：编排整条提取流水线（详见下文「run() 主流程」）。
+- **参数**：无（使用实例属性与全局 `config`）。
+- **关键步骤**：见「run() 主流程」编号 1-12。
+- **输出副作用**：大量 `append_output` 日志；创建/删除临时目录；写 raw.txt/SRT；清空缓存；置 `isFinished=True`(190)。
+- **调用者 / 被调用者**：入口(1073) 与 GUI 调用；调用 `__delete_frame_cache`、`capture_frame_with_subtitle_area`、`start_subtitle_ocr_async`、三条抽帧路径之一、`filter_watermark`、`filter_scene_text`、`generate_subtitle_file(_vsf)`、`reformat.execute`、`empty_cache`、`srt2txt` 等。
+- **风险点**：异常在 finally 释放锁后仍向上抛出，无统一错误日志/回调，GUI 需自行捕获；抽帧分支**不再有 `platform.system()` 判断**，若在非 Windows 环境运行且走 vsf 会触发 `FileNotFoundError`(435)。
+
+#### `capture_frame_with_subtitle_area()` — 行号 198-231
+- **职责**：读取一帧，若存在 `sub_area` 则画绿色矩形并标注 "Subtitle Area"，保存为 `temp_output_dir/sub_area.jpg` 供 GUI 预览选区。
+- **参数**：无。
+- **关键步骤**：203-204 确保临时目录存在；207-208 视频未打开则重开；214 读首帧；219-224 画框与文字；227-228 写 `sub_area.jpg`；231 复位指针到首帧。
+- **输出副作用**：写 `sub_area.jpg`；复位视频指针（供后续抽帧从头开始）。
+- **调用者 / 被调用者**：`run()`(134) 调用；无内部被调用方法。
+- **风险点**：`ret=False`（视频为空）时静默跳过，不会报错；`sub_area.jpg` 会被后续 `filter_scene_text` 用同名文件覆盖（第 549 行），但二者均会被 `empty_cache` 清理。
+
+#### `extract_frame_by_fps()` — 行号 233-259
+- **职责**：按帧率定时跳帧采样，速度最快但易丢字幕；把采样帧作为任务投入 OCR 队列。
+- **参数**：无；依赖 `config.extractFrequency.value`（每秒抽取帧数）。
+- **关键步骤**：238 `frame_interval = int(fps // extractFrequency)` 且下限 1(239-240)；244 循环至 `total_frames`；246 直接 `CAP_PROP_POS_FRAMES` 跳转；252 构造 6 元组任务 `(frame_count, current_frame_no, None, None, None, config.subtitleArea.value)` 入队；255 更新抽帧进度；257 推进到下一个采样点；259 释放 `video_cap`。
+- **输出副作用**：向 `subtitle_ocr_task_queue` 写入任务；更新 `progress_frame_extract`；释放视频句柄。
+- **调用者 / 被调用者**：`run()` 在 `sub_area is None` 时调用(145)。
+- **风险点**：`fps=0` 会导致除零(238)；`sub_area=None` 时仍把 `config.subtitleArea.value`（可能也为 None）作为第 6 元素，下游需容忍；进度基于帧号比例，跳帧采样时进度跳变。
+
+#### `extract_frame_by_det()` — 行号 261-382
+- **职责**：VSE 自研逐帧检测（accurate 模式），通过字幕区域检测 + OCR 文本比对识别字幕头尾帧，只把有效字幕帧投喂 OCR；README 标注「非常慢」。
+- **参数**：无；依赖 `sub_detector`、`self.ocr`、`config.subtitleArea.value`。
+- **关键步骤**：268-280 初始化 LRU 缓存（容量 2）、OCR 参数列表、比对结果缓存、`tqdm`(272) 与懒加载 OCR(279-280)；281 逐帧读取；289 `detect_subtitle` 得检测框；292-305 若限定选区，用 `get_coordinates` 判断框是否落在 `sub_area` 内；309-341 字幕头/尾状态机：头帧 OCR 文本入缓存(313-320)、尾帧判定（末帧 325-331 或文本不一致 333-341）；343-351 无字幕且处于找尾状态时收尾；353-354 维持 LRU 容量；359-370、372-381 把 `ocr_args_list` 中的帧打包成任务入队并更新进度；382 释放视频句柄。
+- **输出副作用**：入队任务；更新抽帧进度；`tqdm` 输出到 stdout；写 `compare_ocr_result_cache`。
+- **调用者 / 被调用者**：`run()` 在 `config.mode.value == 'accurate'` 时调用(141)；内部调用 `SubtitleDetect.detect_subtitle`、`OcrRecogniser.predict`、`get_coordinates`、`__get_area_text`、`_compare_ocr_result`、`update_progress`。
+- **风险点**：`compare_ocr_result_cache` 用帧号作键、缓存过期清理在 `_compare_ocr_result` 内(883-887)，此处又以 `current_frame_no`（而非头帧号）读取缓存(361、374)，键不一致会使 dt_box/rec_res 常为 None，退化为子进程重新 OCR；状态机分支多、边界（首帧即字幕、末帧无字幕）易错；整段同步串行，性能差。
+
+#### `extract_frame_by_vsf()` — 行号 384-460
+- **职责**：调用 Windows 版 VideoSubFinder 检测字幕帧并直接产出原始 SRT（`raw_vsf.srt`），同时由后台线程扫描 RGBImages 推进抽帧进度并入队 OCR 任务。**仅支持 Windows**。
+- **参数**：无；依赖 `sub_area`、`config.videoSubFinderCpuCores`、`config.videoSubFinderDecoder`。
+- **关键步骤**：
+  - 388 置 `use_vsf=True`；389-391 释放并置空 `video_cap`。
+  - 392-430 内嵌 `count_process()`：393 由 `frame_count/fps` 算总时长；395 `processed_image` 去重集合；396 RGBImages 路径；397 时间正则；398 循环条件 `self.vsf_running and not self.isFinished`；399 每 0.2s 轮询；401-403 目录不存在则等待；406-407 列目录并排序；409-412 过滤已处理/格式不符文件；416-417 解析 `h_m_s_ms` 为毫秒；418-427 时间前进则构造任务 `(frame_count, frame_no, None, None, total_ms, config.subtitleArea.value)` 入队并按 `total_ms/duration_ms` 更新进度，达 100% 即 `return`；429-430 `FileNotFoundError` 时退出。
+  - 432-435 固定 Windows 可执行文件 `subfinder/windows/VideoSubFinderWXW.exe`，不存在则抛 `FileNotFoundError`。
+  - 437-440 字幕像素坐标换算为 VSF 百分比（top/bottom/left/right）。
+  - 442-444 线程数默认 `cpu_count-2`（下限 1），可由 `videoSubFinderCpuCores` 覆盖。
+  - 445-449 拼装命令：`-c -r -i ... -o ... -ces ... -te/-be/-le/-re ... -nthr/-nocrthr ... --open_video_{decoder}`；**无 `--use_cuda` 参数**。
+  - 450-460 `try`：451 置 `vsf_running=True`、452 启动 `count_process` 守护线程、453-455 `Popen`（`shell=False`、`CREATE_NEW_PROCESS_GROUP`）、456 注册进程、457 `manage_process(p.pid)`、458 `wait()`；459-460 `finally` 复位 `vsf_running=False`。
+- **输出副作用**：写 `raw_vsf.srt` 与 RGBImages（VSF 进程产出）；入队 OCR 任务；更新抽帧进度；注册子进程。
+- **调用者 / 被调用者**：`run()` 在有选区且非 accurate 模式时调用(143)；内嵌线程调用 `update_progress`、`subtitle_ocr_task_queue.put`。
+- **风险点**：Windows-only，硬编码 exe 路径，跨平台直接失败；进度完全依赖 RGBImages 文件名落盘顺序，VSF 未产出/产出慢时进度停滞；`count_process` 是唯一进度线程（无 vsf_output 相关线程），`self.vsf_running` 为实例级共享标志，与 `manage_process` 外部替换需协同；`total_ms/self.fps`(419) 在 fps 为 0 时除零（换算用 ms 除以 fps 得帧号，量纲存疑但沿用现状）；`p.wait()` 阻塞，异常处理仅复位标志不重抛。
+
+#### `filter_watermark()` — 行号 461-520
+- **职责**：检测潜在水印（台标）区域，生成标注图让用户确认，并按确认结果从 raw.txt 删除对应文本行。
+- **参数**：无；依赖 `config.waterarkAreaNum.value`。
+- **关键步骤**：466 `_detect_watermark_area` 得候选；469-477 随机抽帧；479-481 读帧失败则报错返回；483-502 用 `area_num=['E','D','C','B','A']` 给区域编号、画红色框、写 `watermark_area.jpg` 并提示用户看图；504-517 逐区域 `_safe_input` 询问，输入 `y`/`\n` 则读 raw.txt，删除包含该坐标字符串的行并 `truncate`(509-515)；519-520 删除预览图。
+- **输出副作用**：写/删 `watermark_area.jpg`；原地改写 raw.txt；打印提示。
+- **调用者 / 被调用者**：`run()` 在 `sub_area is None` 且用户水印提问回答 `y` 时调用(161)；调用 `_detect_watermark_area`、`_safe_input`。
+- **风险点**：GUI 无 stdin 时 `_safe_input` 返回 `''`，不会误删水印；`area_num` 最多 5 个，候选超过 5 个会 `IndexError`(497/506)；按字符串 `find` 匹配坐标脆弱（坐标归一化后格式变化可能漏删）。
+
+#### `filter_scene_text()` — 行号 522-567
+- **职责**：识别字幕区域 y 范围，生成标注图让用户确认，仅保留该范围内的 raw.txt 文本行（过滤场景文字）。
+- **参数**：无；依赖 `config.subtitleAreaDeviationPixel.value`。
+- **关键步骤**：527 `_detect_subtitle_area()[0][0]` 取最常见 y 区间；530-538 随机抽帧；540-542 读帧失败报错返回；545-546 按容差扩展 ymin/ymax（ymin 用 `abs`）；548-551 画框写 `subtitle_area.jpg` 并提示；553 用 `_safe_input` 询问；554-564 输入 `y`/`\n` 则读 raw.txt，解析每行坐标 y 值(559-560)，仅保留落在 `[ymin,ymax]` 的行；566-567 删除预览图。
+- **输出副作用**：写/删 `subtitle_area.jpg`；原地改写 raw.txt；打印提示。
+- **调用者 / 被调用者**：`run()` 在 `sub_area is None` 时无条件调用(168)；调用 `_detect_subtitle_area`、`_safe_input`。
+- **风险点**：`_detect_subtitle_area` 无结果时 `[0][0]` 会 `IndexError`(527)；`config.subtitleAreaDeviationPixel.value` 容差以像素为单位（区别于百分比配置）；GUI 下 `_safe_input` 返回 `''` 则不过滤，场景文字残留。
+
+#### `generate_subtitle_file()` — 行号 569-592
+- **职责**：常规路径（非 VSF）下生成 SRT，对持续时间不足 1 秒的字幕把结束时间延长到 1 秒。
+- **参数**：无；依赖 `self.use_vsf`（为 False 才执行）。
+- **关键步骤**：573 守卫；574 `_remove_duplicate_subtitle` 得去重列表；577-589 逐条：580 `_frame_to_timecode` 算起始；582 若 `abs(结束帧-起始帧) < fps` 则用 `起始帧+fps` 作结束并记录 `line_code` 到 `post_process_subtitle`(583-584)，否则用真实结束帧(586)；588 拼 SRT 行写入；590 打印输出路径。
+- **输出副作用**：写 `subtitle_output_path`（SRT 文件）；打印字幕位置。
+- **调用者 / 被调用者**：`run()` 在 `not use_vsf` 时调用(181)；调用 `_remove_duplicate_subtitle`、`_frame_to_timecode`。
+- **风险点**：`post_process_subtitle` 返回值当前**无人接收**（run() 第 181 行忽略），“延长到 1 秒”的后续后处理形同虚设；`use_vsf=True` 时函数静默返回 None。
+
+#### `generate_subtitle_file_vsf()` — 行号 594-624
+- **职责**：VSF 路径下，把 OCR 文本填充进 VSF 产出的时间轴，生成最终 SRT。
+- **参数**：无；依赖 `config.deleteEmptyTimeStamp.value`。
+- **关键步骤**：595-596 守卫；597 `pysrt.open(vsf_subtitle)`；599-601 为每条 VSF 字幕计算起始帧号并建 `sub_no_map`；603 `_remove_duplicate_subtitle`；604 建起始帧→内容的映射；606-621 遍历 VSF 字幕：命中映射则替换 `sub.text`、按 OCR 结束帧修正 `sub.end`(610-613)，未命中且 `deleteEmptyTimeStamp=False` 则保留空文本时间轴(616-621)；623 `pysrt.SubRipFile(...).save`；624 打印路径。
+- **输出副作用**：写 `subtitle_output_path`；打印字幕位置。
+- **调用者 / 被调用者**：`run()` 在 `use_vsf` 时调用(178)；调用 `_remove_duplicate_subtitle`、`_timestamp_to_frameno`。
+- **风险点**：`sub_no_map` 以起始帧为键，`_timestamp_to_frameno` 由 ms 换算帧，与 OCR 帧号体系可能对不上导致大量未命中；空时间轴保留策略依赖配置项；无 `encoding` 显式处理读 VSF SRT（pysrt 默认编码）。
+
+#### `_detect_watermark_area()` — 行号 626-661
+- **职责**：统计 raw.txt 中坐标频率，找出固定出现的区域（水印/台标），并把坐标归一后写回 raw.txt。
+- **参数**：无；依赖 `config.waterarkAreaNum.value`。
+- **关键步骤**：633-634 读 raw.txt；637-646 解析每行（帧号、坐标四元组、内容）为 `parsed`；648-652 拆三列并 `_unite_coordinates` 统一相似坐标；655-657 写回归一化坐标；659-661 `Counter(...).most_common()` 取前 `min(waterarkAreaNum, len)` 个返回。
+- **输出副作用**：原地改写 raw.txt（坐标归一化）。
+- **调用者 / 被调用者**：`filter_watermark`(466) 调用；调用 `_unite_coordinates`。
+- **风险点**：解析依赖 `\t` 与 `'(' ')'` 的严格格式，畸形行 `split('\t')<3` 被跳过(639)；归一化写回会丢失原始坐标；返回列表元素为 `(coordinate, count)`，`filter_watermark` 用 `watermark_area[0]` 取坐标，耦合较强。
+
+#### `_detect_subtitle_area()` — 行号 663-678
+- **职责**：从过滤水印后的 raw.txt 统计出现频率最高的 y 坐标区间作为字幕区域。
+- **参数**：无。
+- **关键步骤**：669-670 读 raw.txt；672-677 解析每行 ymin/ymax 入列表；678 `Counter(y_coordinates_list).most_common(1)` 返回。
+- **输出副作用**：无（只读）。
+- **调用者 / 被调用者**：`filter_scene_text`(527) 调用。
+- **风险点**：raw.txt 为空时返回 `[]`，调用方 `[0][0]` 越界（见 filter_scene_text 风险点）；只取 top1，双行字幕区域可能被低估。
+
+#### `_frame_to_timecode(frame_no)` — 行号 680-693
+- **职责**：帧号 → SMPTE 时间码字符串（纯计算，不打开视频）。
+- **参数**：`frame_no`（帧号）。
+- **关键步骤**：686 `frame_no/fps*1000` 得毫秒；688-692 拆分毫秒/秒/分/时；693 格式化 `'%02d:%02d:%02d,%03d'`。
+- **输出副作用**：无。
+- **调用者 / 被调用者**：`generate_subtitle_file`(580、583、586) 调用。
+- **风险点**：`fps` 为 0 时除零；浮点取整误差在长视频累积。
+
+#### `_timestamp_to_frameno(time_ms)` — 行号 695-696
+- **职责**：毫秒时间戳 → 帧号。
+- **参数**：`time_ms`。
+- **关键步骤**：696 `int(time_ms / self.fps)`。
+- **输出副作用**：无。
+- **调用者 / 被调用者**：`generate_subtitle_file_vsf`(600) 调用。
+- **风险点**：`fps=0` 除零；截断取整丢失亚帧精度。
+
+#### `_frameno_to_milliseconds(frame_no)` — 行号 698-699
+- **职责**：帧号 → 毫秒（浮点取整）。
+- **参数**：`frame_no`。
+- **关键步骤**：699 `float(int(frame_no / self.fps * 1000))`。
+- **输出副作用**：无。
+- **调用者 / 被调用者**：当前**无调用路径**（遗留工具方法）。
+- **风险点**：`fps=0` 除零；与 `_frame_to_timecode` 逻辑重复。
+
+#### `_remove_duplicate_subtitle()` — 行号 701-751
+- **职责**：读取 raw.txt，按文本相似度合并连续重复字幕，返回去重后的 `(start_frame, end_frame, content)` 列表，并在循环内推进后处理进度。
+- **参数**：无；依赖 `config.thresholdTextSimilarity.value`、`self.use_vsf`。
+- **关键步骤**：705 `_concat_content_with_same_frameno`；706-713 读 raw.txt 构造 `RawInfo(no, content)` 列表；714-720 初始化去重列表与进度节流（`report_interval = max(1, len//100)`）；721-751 双层循环：内层用 `Levenshtein.ratio` 与下一行相似度比较(732)，低于阈值即确定结束帧；735-738 非 VSF 且单帧时以下一帧开始时间为准；740-745 取最长文本作代表；727-729 定期 `update_progress(post=20 + 65*idx_j/len)`（post 20→85）。
+- **输出副作用**：更新 `progress_post`；不改文件（前序 `_concat...` 已改 raw.txt）。
+- **调用者 / 被调用者**：`generate_subtitle_file`(574)、`generate_subtitle_file_vsf`(603) 调用；调用 `_concat_content_with_same_frameno`、`update_progress`。
+- **风险点**：`content_list_len=0` 时 `report_interval` 计算与循环安全（while 不进），但调用方后续可能拿到空列表；去重用 `replace(' ','')`，空格差异被忽略；O(n²) 双层循环，长视频后处理慢；`post` 进度只在此处推进到 85，随后 run() 直接跳到 90(183)。
+
+#### `_concat_content_with_same_frameno()` — 行号 753-778
+- **职责**：把 raw.txt 中相同帧号的多行文本合并为一行（用空格连接）并做 NFKC 归一化，写回文件。
+- **参数**：无。
+- **关键步骤**：757-758 读 raw.txt；761 局部 `from collections import OrderedDict`；762-770 按帧号分组（保留顺序、保留首个坐标）；772-778 写回，`' '.join(contents)`、补 `\n`、`unicodedata.normalize('NFKC', ...)`。
+- **输出副作用**：原地改写 raw.txt（破坏性，去重前置步骤）。
+- **调用者 / 被调用者**：`_remove_duplicate_subtitle`(705) 调用。
+- **风险点**：直接覆写 raw.txt，调试时需开启 `debugNoDeleteCache` 才能留存；坐标取同帧第一行，其余行坐标丢弃；畸形行（少于 3 列）跳过。
+
+#### `_unite_coordinates(coordinates_list)` — 行号 780-820
+- **职责**：把相似坐标统一为同一代表值（基于 xmin 排序 + 滑动窗口 + 并查集）。
+- **参数**：`coordinates_list`（坐标四元组列表）。
+- **关键步骤**：788-789 空列表直接返回；792 按 xmin 排序并保留原索引；794-806 并查集 `find`/`union`；807-815 滑动窗口（xmin 差值超过 `config.tolerantPixelX.value` 则移动左边界），窗口内 `__is_coordinate_similar` 为真则 union；816-820 用组代表坐标替换原值。
+- **输出副作用**：无（返回新列表）。
+- **调用者 / 被调用者**：`_detect_watermark_area`(652) 调用；调用 `__is_coordinate_similar`。
+- **风险点**：仅用 xmin 排序做滑动窗口，y 差异大而 x 相近的坐标也会被纳入窗口比较（由 `__is_coordinate_similar` 兜底）；并查集代表取较小原始索引，可能非“最标准”坐标；复杂度 O(n·窗口)。
+
+#### `_compute_image_similarity(image1, image2)` — 行号 822-843
+- **职责**：计算两张图片的余弦相似度（缩略图灰度向量）。
+- **参数**：`image1`、`image2`（PIL Image）。
+- **关键步骤**：826-827 `__get_thum` 得缩略图；831-838 逐像素取 `average` 组成向量并算 `linalg.norm`；842 `dot(a/a_norm, b/b_norm)` 返回余弦值。
+- **输出副作用**：无。
+- **调用者 / 被调用者**：当前**无调用路径**（遗留方法）。
+- **风险点**：`__get_thum` 默认 `greyscale=False`，返回 RGB，`average` 对三通道取均值，语义模糊；纯色图范数为 0 会除零。
+
+#### `__get_area_text(ocr_result)` — 行号 845-861（私有）
+- **职责**：从 OCR 结果中筛出落在 `sub_area` 内的文本并拼接为字符列表。
+- **参数**：`ocr_result` = `(box, text)`。
+- **关键步骤**：850 `get_coordinates(box)`；852-860 遍历 `(content, coordinate)`，若四坐标完全落在 `sub_area` 内则 `append(content[0])`。
+- **输出副作用**：无。
+- **调用者 / 被调用者**：`extract_frame_by_det`(314)、`_compare_ocr_result`(873、880) 调用。
+- **风险点**：依赖 `sub_area` 非 None（det 路径保证）；`content[0]` 假定每项为可索引文本项，格式变化会异常。
+
+#### `_compare_ocr_result(result_cache, img1, img1_no, img2, img2_no)` — 行号 863-891
+- **职责**：比较两帧 OCR 出的字幕区域文本是否相同（供 det 状态机判断字幕尾）。
+- **参数**：`result_cache`（帧号→OCR 结果缓存）、`img1`/`img1_no`、`img2`/`img2_no`（两帧图像与帧号）。
+- **关键步骤**：867-868 懒加载 OCR；869-881 若帧号不在缓存则 `predict` 并把 `text/dt_box/rec_res` 入缓存；882-887 清理帧号 `< min(img1_no,img2_no)-10` 的旧缓存；888-891 `ratio(area_text1, area_text2) > config.thresholdTextSimilarity.value/100.0` 返回布尔。
+- **输出副作用**：写/清理 `result_cache`。
+- **调用者 / 被调用者**：`extract_frame_by_det`(335) 调用；调用 `OcrRecogniser.predict`、`__get_area_text`。
+- **风险点**：缓存清理阈值硬编码 10；判定与去重共用同一相似度配置但语义不同；传入 `img1=None` 时若帧号未缓存会 `predict(None)` 崩溃（依赖调用方先缓存头帧）。
+
+#### `__is_coordinate_similar(coordinate1, coordinate2)` — 行号 893-902（静态私有）
+- **职责**：判断两坐标四差值是否都在容差内。
+- **参数**：两个坐标四元组。
+- **关键步骤**：899-902 分别用 `config.tolerantPixelX.value`（xmin/xmax）与 `config.tolerantPixelY.value`（ymin/ymax）比较。
+- **输出副作用**：无。
+- **调用者 / 被调用者**：`_unite_coordinates`(814) 调用。
+- **风险点**：容差严格 `<`，边界相等视为不相似；`.value` 使用正确（反映最终修复状态）。
+
+#### `__get_thum(image, size=(64,64), greyscale=False)` — 行号 904-914（静态私有）
+- **职责**：统一图像尺寸（可选灰度），用于相似度计算。
+- **参数**：`image`、`size`、`greyscale`。
+- **关键步骤**：910 `image.resize(size, Image.Resampling.LANCZOS)`（高质量重采样，反映最终修复状态）；911-913 灰度时 `convert('L')`。
+- **输出副作用**：无。
+- **调用者 / 被调用者**：`_compute_image_similarity`(826-827) 调用（该方法无调用路径）。
+- **风险点**：`Image.Resampling.LANCZOS` 需 Pillow ≥ 9.1，旧环境会 `AttributeError`；默认不转灰度。
+
+#### `__delete_frame_cache()` — 行号 916-918（私有）
+- **职责**：无条件删除整个 `temp_output_dir`（run() 开始前的缓存清理）。
+- **参数**：无。
+- **关键步骤**：917-918 `os.path.exists` 则 `shutil.rmtree(path, True)`。
+- **输出副作用**：删除磁盘目录（含此前预览图、raw.txt 等）。
+- **调用者 / 被调用者**：`run()`(128) 调用。
+- **风险点**：`rmtree(..., True)` 忽略错误；若 temp 目录被其他任务共用会误删（目录名基于视频名，冲突概率低）。
+
+#### `empty_cache()` — 行号 920-926
+- **职责**：run() 成功后按配置清理临时缓存。
+- **参数**：无；依赖 `config.debugNoDeleteCache.value`。
+- **关键步骤**：924 若 `not debugNoDeleteCache` 且目录存在(925) 则 `rmtree`(926)。
+- **输出副作用**：删除 `temp_output_dir`（调试开启时保留）。
+- **调用者 / 被调用者**：`run()`(192) 调用。
+- **风险点**：与 `__delete_frame_cache` 逻辑重复，仅 debug 判断不同；异常路径（run() 中途抛错）不会清理缓存。
+
+#### `update_progress(ocr=None, frame_extract=None, post=None)` — 行号 928-942
+- **职责**：更新三段进度（各自 clamp 0-100）并通知监听器。
+- **参数**：三个可选进度值。
+- **关键步骤**：935-940 对每个非 None 值 `max(0, min(100, value))`；942 `notify_progress_listeners()`。
+- **输出副作用**：改写三个进度属性；触发所有监听器回调。
+- **调用者 / 被调用者**：run()、三条抽帧路径、`_remove_duplicate_subtitle`、`start_subtitle_ocr_async` 内进度线程等广泛调用；调用 `notify_progress_listeners`。
+- **风险点**：每次更新都遍历全部监听器，高频抽帧时回调密集；监听器异常由 `notify_progress_listeners` 内部吞掉，不影响主流程。
+
+#### `start_subtitle_ocr_async()` — 行号 944-994
+- **职责**：启动 OCR 子进程，建立双向队列，启动进度监听线程，返回进程对象。**`options` 含 `MAX_BATCH_SIZE`。**
+- **参数**：无；依赖 `self.video_path`、`raw_subtitle_path`、`sub_area`、多项 `config`。
+- **关键步骤**：
+  - 945-977 内嵌 `get_ocr_progress()`：955 阻塞取进度消息；956-958 首次打印 `StartFindSub`；960-962 处理 `(-2, total_tasks)` 记录总帧数；964-969 处理 `-1`/`(-1, ...)` 终止信号并置 `ocr=100` 返回；971-977 处理 `(frame_no, processed_count)`，按 `processed_count/total_tasks` 算 `ocr_pct`（封顶 99）。
+  - 978-986 `options` 字典：`REC_CHAR_TYPE`(979)、`DROP_SCORE`(980)、`SUB_AREA_DEVIATION_RATE`(981)、`DEBUG_OCR_LOSS`(982)、`HARDWARD_ACCELERATOR`(983)、**`MAX_BATCH_SIZE: config.maxBatchSize.value`(985，帧预取队列容量 / DB 每批图片数)**。
+  - 987 `subtitle_ocr.async_start(...)` 返回 `(process, task_queue, progress_queue)`；988 注册进程；989 `manage_process(process.pid)`；990-991 保存两个队列；993 启动进度线程；994 返回 process。
+- **输出副作用**：创建子进程与两个 `multiprocessing.Queue`；注册进程；启动守护线程；打印 `StartFindSub`。
+- **调用者 / 被调用者**：`run()`(136) 调用；调用 `subtitle_ocr.async_start`、`ProcessManager.add_process`、`manage_process`。
+- **风险点**：`manage_process(self, pid)` 是空实现（GUI 猴子补丁注入）；`options` 键名 `HARDWARD_ACCELERATOR` 拼写错误但子进程沿用，不可随意改；`MAX_BATCH_SIZE` 需与 `config.maxBatchSize`（范围 1-256）匹配；进度线程 `get(block=True)` 无超时，子进程异常退出不自动结束线程。
+
+#### `srt2txt(srt_file)` — 行号 996-1002
+- **职责**：把 SRT 导出为纯文本（每行字幕文本）。
+- **参数**：`srt_file`（SRT 路径）。
+- **关键步骤**：997 `pysrt.open(encoding='utf-8')`；998 生成同名 `.txt` 路径；999 打印路径；1000-1002 写文本。
+- **输出副作用**：写 `.txt` 文件；打印输出路径。
+- **调用者 / 被调用者**：`run()` 在 `config.generateTxt.value` 为真时调用(196，位于 finally 之后)。
+- **风险点**：位于 `run()` 的 try/finally **之后**，若 try 内异常，此段不会执行（不会导出 txt）。
+
+#### `append_output(*args)` — 行号 1004-1009
+- **职责**：统一控制台输出（多参数空格连接）。
+- **参数**：可变参数。
+- **关键步骤**：1009 `print(*args)`。
+- **输出副作用**：stdout 打印。
+- **调用者 / 被调用者**：全文广泛使用。
+- **风险点**：CLI 与 GUI（子进程 stdout 重定向）行为一致；无日志分级。
+
+#### `_safe_input(prompt)` — 行号 1011-1022（静态）
+- **职责**：交互式提问的健壮封装；捕获 `EOFError/OSError` 返回空串，使无 stdin 的 GUI 任务退化为「不执行需人工确认的过滤步骤」。
+- **参数**：`prompt`。
+- **关键步骤**：1019-1020 `input(prompt).strip()`；1021-1022 捕获 `(EOFError, OSError)` 返回 `''`。
+- **输出副作用**：打印提示（input 自带）。
+- **调用者 / 被调用者**：`run()`(159)、`filter_watermark`(506)、`filter_scene_text`(553) 调用。
+- **风险点**：返回 `''` 使 `filter_*` 不执行过滤（设计如此）；仅捕获两类异常，其他输入异常仍会抛出。
+
+#### `add_progress_listener(listener)` — 行号 1024-1032
+- **职责**：注册进度回调（去重）。
+- **参数**：`listener`（回调，签名见 notify）。
+- **关键步骤**：1031-1032 不在列表则追加。
+- **输出副作用**：修改 `progress_listeners`。
+- **调用者 / 被调用者**：GUI/外部调用。
+- **风险点**：无锁保护，与 notify 并发时 List 迭代可能被修改（CPython 下通常安全）。
+
+#### `remove_progress_listener(listener)` — 行号 1034-1042
+- **职责**：移除进度回调。
+- **参数**：`listener`。
+- **关键步骤**：1041-1042 存在则移除。
+- **输出副作用**：修改 `progress_listeners`。
+- **调用者 / 被调用者**：GUI/外部调用。
+- **风险点**：同上无锁。
+
+#### `notify_progress_listeners()` — 行号 1044-1052
+- **职责**：逐个调用监听器，传入当前进度。
+- **参数**：无。
+- **关键步骤**：1048 遍历；1050 调用 `listener(progress_ocr, progress_frame_extract, progress_total, isFinished, progress_post)`（**注意：共 5 个参数，含 `progress_post`**）；1049-1052 异常则 `traceback.print_exc()`，不影响其他监听器。
+- **输出副作用**：触发回调；异常时打印堆栈。
+- **调用者 / 被调用者**：`update_progress`(942) 调用。
+- **风险点**：签名与 `add_progress_listener` 文档字符串(1029，仅列 4 个参数)不一致，文档已过时；单监听器异常被吞，问题隐蔽。
+
+#### `manage_process(pid)` — 行号 1054-1056
+- **职责**：上报外部进程 PID 的钩子；CLI 下为空实现，GUI 侧替换为回调以纳入进程管理。
+- **参数**：`pid`（子进程 PID）。
+- **关键步骤**：1056 `pass`。
+- **输出副作用**：无（CLI 下）。
+- **调用者 / 被调用者**：`start_subtitle_ocr_async`(989)、`extract_frame_by_vsf`(457) 调用。
+- **风险点**：空实现意味着 CLI 下 PID 不注册到 GUI 进程树；必须由 GUI 注入，否则外部进程生命周期不受控。
+
+- **run() 主流程**（`第 102-196 行`，按执行顺序编号）：
+  1. **计时与加锁**（107-109）：`start_time=time.time()`；`self.lock.acquire()`；进入 `try`（109）。
+  2. **重置进度与日志头**（111-124）：`update_progress(ocr=0, frame_extract=0, post=0)`(111)；打印分隔线、识别语言/模式(114)、加速状态(116-117)、帧数/帧率(120-121)、**`OCR 后端: {config.ocrBackend.value} | 模型档位: {config.modelTier.value} (PP-OCRv6 ONNX)`**(123) 与分隔线(124)。
+  3. **抽帧前提示与目录准备**（126-133）：`StartProcessFrame`；`__delete_frame_cache()`(128)；创建 `frame_output_dir`、`subtitle_output_dir`(130-133)。
+  4. **预览帧绘制**（134）：`capture_frame_with_subtitle_area()`。
+  5. **启动 OCR 子进程**（136）：`subtitle_ocr_process = start_subtitle_ocr_async()`。
+  6. **执行抽帧**（137-145）：有 `sub_area` 时，`mode=='accurate'` → `extract_frame_by_det()`(141)，否则 → `extract_frame_by_vsf()`(143)；无 `sub_area` → `extract_frame_by_fps()`(145)。**此分支无 `platform.system()` 判断**。
+  7. **结束标志与等待**（147-154）：向任务队列投 `(frame_count, -1, None, None, None, None)`(149)；`subtitle_ocr_process.join()`(151)；打印帧处理与查找完成提示(153-154)。
+  8. **水印过滤（无选区时）**（156-164）：提示 `StartDetectWaterMark`；`_safe_input` 询问，回答 `y` → `filter_watermark()`(161)，否则仅打印分隔线。
+  9. **场景文字过滤（无选区时）**（166-169）：提示后无条件 `filter_scene_text()`(168)；随后 `update_progress(post=20)`(171)。
+  10. **生成字幕**（173-183）：提示 `StartGenerateSub`；`use_vsf` → `generate_subtitle_file_vsf()`(178)，否则 `generate_subtitle_file()`(181)；`update_progress(post=90)`(183)。
+  11. **分词后处理与收尾**（185-192）：`config.wordSegmentation.value` 为真时 `reformat.execute(...)`(186)；打印完成与耗时(187)；`update_progress(ocr=100, frame_extract=100, post=100)`(189)；`isFinished=True`(190)；`empty_cache()`(192)。
+  12. **finally 与 txt 导出**（193-196）：`finally` 中 `self.lock.release()`(194)；**锁释放后**若 `config.generateTxt.value` 则 `srt2txt(...)`(195-196)。
+
+- **任务队列协议**：
+  - **任务队列 `subtitle_ocr_task_queue`（主 → OCR 子进程）**：元素为 6 元组
+    `(total_frame_count, current_frame_no, dt_box, rec_res, frame_time, subtitle_area)`。
+    - `total_frame_count`：总帧数；`current_frame_no`：当前帧号；`dt_box`/`rec_res`：det 路径可复用的检测框/识别结果，其余路径为 `None`；`frame_time`：VSF 路径的毫秒时间，其余为 `None`；`subtitle_area`：字幕区域（取 `config.subtitleArea.value`）。
+    - **结束哨兵**：`(frame_count, -1, None, None, None, None)`（第 149 行），由 run() 在所有抽帧任务入队后发送。
+    - 生产者：`extract_frame_by_fps`(253)、`extract_frame_by_det`(369、381)、`extract_frame_by_vsf` 的 `count_process`(421)；消费者：OCR 子进程（`subtitle_ocr.async_start` 内部）。
+  - **进度队列 `subtitle_ocr_progress_queue`（OCR 子进程 → 主）**：
+    - `(-2, total_tasks)`：生产者告知总帧数（约定见 948 行注释）。
+    - `(frame_no, processed_count)`：消费者每处理一帧上报。
+    - `-1` 或 `(-1, ...)`：处理完成终止信号（964-969 行兼容两种形式）。
+    - 消费者：`get_ocr_progress` 线程(955-977)。
+
+- **三种抽帧路径对比表**：
+
+| 维度 | `extract_frame_by_fps()` (233-259) | `extract_frame_by_det()` (261-382) | `extract_frame_by_vsf()` (384-460) |
+| --- | --- | --- | --- |
+| 触发条件 | `sub_area is None` | 有 `sub_area` 且 `mode=='accurate'` | 有 `sub_area` 且 `mode∈{fast,auto}` |
+| 核心手段 | 按 `fps/extractFrequency` 跳帧采样 | `SubtitleDetect` + OCR 文本比对定头尾 | 外部 `VideoSubFinderWXW.exe` |
+| 平台 | 跨平台（仅用 cv2） | 跨平台（仅用 cv2 + OCR） | **仅 Windows**（硬编码 exe，432-435） |
+| `use_vsf` | False | False | **True**(388) |
+| 帧来源 | 主进程 `video_cap` 逐帧跳读 | 主进程 `video_cap` 顺序读 | VSF 产出 RGBImages + raw_vsf.srt |
+| 任务入队 | 每采样帧入队(253) | 字幕头/尾帧入队(369、381) | `count_process` 扫文件名入队(421) |
+| `dt_box/rec_res` | None | 部分复用 det 结果 | None |
+| 进度来源 | 帧号比例(255) | 帧号比例(370) | RGBImages 文件名时间比例(427) |
+| 进度线程 | 无 | 无（tqdm 在抽帧线程） | 有（`count_process` 守护线程，452） |
+| 子进程注册 | 无 | 无 | `ProcessManager` + `manage_process`(456-457) |
+| 速度/准确度 | 最快、易丢字幕 | 最慢（README「非常慢」）、较准 | 快、依赖 VSF 检测质量 |
+| 字幕生成 | `generate_subtitle_file()` | `generate_subtitle_file()` | `generate_subtitle_file_vsf()` |
+| 关键风险 | `fps=0` 除零 | 状态机复杂、缓存键不一致 | Windows-only、进度依赖文件名落盘 |
+
+- **跨进程/跨模块调用清单**：
+
+| 目标 | 位置 | 方式 | 说明 |
+| --- | --- | --- | --- |
+| `subtitle_ocr.async_start` | 987 | 函数调用（内部起子进程） | 启动 OCR 生产者/消费者进程，返回进程与两队列 |
+| OCR 子进程 | 通过 `subtitle_ocr_task_queue` / `progress_queue` | `multiprocessing.Queue`（spawn） | 6 元组任务入、进度消息出 |
+| `VideoSubFinderWXW.exe` | 433-458 | `subprocess.Popen` | VSF 外部进程，`CREATE_NEW_PROCESS_GROUP`，注册到 `ProcessManager` |
+| `ProcessManager.instance().add_process` | 456、988 | 单例方法 | 注册外部进程供退出清理 |
+| `manage_process(pid)` | 457、989 | 实例方法（空实现，GUI 注入） | 上报 PID |
+| `HardwareAccelerator.instance()` | 50 | 单例 | 配置/探测硬件加速，传入 OCR `options`(983) |
+| `SubtitleDetect.detect_subtitle` | 289 | 对象方法 | det 路径逐帧检测字幕框 |
+| `OcrRecogniser.predict` | 280、313、868、872、879 | 对象方法（懒加载） | det 路径本地 OCR 比对 |
+| `get_coordinates` | 293、850 | 函数 | 检测框 → 坐标四元组 |
+| `reformat.execute` | 186 | 模块函数 | 分词后处理（条件开启） |
+| `pysrt.open` / `SubRipFile.save` | 597、623、997 | 库调用 | VSF 字幕读取、最终 SRT 写出、srt→txt |
+| 进度监听器回调 | 1050 | 回调（5 参数） | 回传 ocr/frame_extract/total/isFinished/post |
+| `Image.Resampling.LANCZOS` | 910 | 库常量 | 缩略图高质量重采样 |
+
+- **维护与重构建议**：
+  1. **清理死导入**：`platform`(35) 全文未使用（抽帧已仅 Windows），可删除；`PaddleModelConfig` 已移除，导入区无需再补；`_frameno_to_milliseconds`(698-699)、`_compute_image_similarity`(822-843)、`__get_thum`(904-914) 均无调用路径，可评估删除或补测试。`numpy`、`PIL` 依赖仅服务于上述死方法，删后可减依赖。
+  2. **补齐命令行与 VSF 的健壮性**：入口无参数解析，建议引入 argparse 支持非交互运行；`extract_frame_by_vsf` 硬编码 Windows exe 路径，建议改为配置项 + 启动前平台/文件双重校验并给出友好错误，而非裸抛 `FileNotFoundError`(435)。
+  3. **修正进度回调签名文档**：`add_progress_listener`(1029) 文档只列 4 参数，而 `notify_progress_listeners`(1050) 实际传 5 个（含 `progress_post`），需统一。
+  4. **`post` 进度与 `post_process_subtitle` 断链**：`generate_subtitle_file` 返回不足 1 秒的字幕行(592) 无人接收(181)，该后处理逻辑失效；`_remove_duplicate_subtitle` 把 post 推到 85(729)，run() 直接跳 90(183)，中间无实际工作，建议要么落实后处理要么移除返回值。
+  5. **det 路径缓存键缺陷**：`extract_frame_by_det` 用 `current_frame_no` 读 `compare_ocr_result_cache`(361、374)，但写入用的是头帧号(316)，导致 dt_box/rec_res 常为 None；建议统一键并提取独立的状态机类以降低圈复杂度。
+  6. **统一缓存清理**：`__delete_frame_cache`(916) 与 `empty_cache`(920) 逻辑重复；异常路径（run() 抛错）不清理缓存，建议把清理纳入 `finally`。
+  7. **`manage_process` 空实现**：CLI 下 PID 不上报，外部进程生命周期不受控，建议提供默认注册到 `ProcessManager` 的实现，GUI 仅覆盖上报部分。
+  8. **除零防护**：`fps` 为 0 时 `extract_frame_by_fps`(238)、`_frame_to_timecode`(686)、`_timestamp_to_frameno`(696)、`_frameno_to_milliseconds`(699)、`_compute_image_similarity`(842) 均有风险，建议在 `__init__` 读取视频元数据后统一校验。
+  9. **`MAX_BATCH_SIZE` 与配置一致性**：`options`(985) 直接取 `config.maxBatchSize.value`（范围 1-256），需与 OCR 子进程帧预取队列实现保持契约，调大时注意内存占用；键名 `HARDWARD_ACCELERATOR`(983) 拼写错误但为既有协议，改名需同步子进程。
+  10. **日志可观测性**：`append_output` 仅 `print`，无分级/落盘，CLI/GUI 混合场景下排障困难，建议接入标准日志。
+
+## 三、后端工具模块 backend/tools/
+
+本分片覆盖 `backend/tools/` 下全部 15 个 Python 文件（按 `__init__.py` → `version_service.py` 顺序）。`paddle_model_config.py` 不在当前目录中，本分片不含该模块。
+
+整体定位如下：
+
+- **OCR 后端已统一到 ONNX Runtime**：`onnx_ocr.py` 是核心，提供 `OnnxOcrRecogniser`，同时支持 `CPUExecutionProvider` 与 `DmlExecutionProvider`，使用官方 **PP-OCRv6** ONNX 模型（`det` 为 `PP-OCRv6_small_det`，`rec` 轻量档 `tiny` / 精准档 `small`）。检测后处理（DBNet）与识别解码（CTC）内联实现，不依赖 PaddleX 私有 API。
+- `ocr.py` 是 OCR 门面，仅依赖 ONNX 后端，不引入 PaddleOCR / PaddlePaddle；后端、档位、DML 设备由全局 `config` 决定，`hardwareAcceleration` 总开关关闭时强制 CPU。
+- `hardware_accelerator.py` 为执行后端信息单例，仅枚举 DML 设备，`has_cuda()` 恒为 `False` 作为兼容占位。
+- `env_check.py` 集中 GUI 启动时的环境/模型检测与后台下载。
+- `subtitle_detect.py`（精准模式逐帧检测）、`subtitle_ocr.py`（OCR 子进程流水线）、`process_manager.py`、`python_runner.py`、`subtitle_extractor_remote_call.py` 构成并发与进程控制骨架；`reformat.py`、`constant.py`、`theme_listener.py`、`version_service.py`、`makedist.py` 为辅助工具。
+- `makedist.py` 只生成 CPU / DirectML 打包变体，无 CUDA 参数与 CUDA 依赖包。
+
+以下各文件行号均基于当前磁盘文件重新核对。
 
 ---
 
-### backend/bean/subtitle_area.py
-- **路径**：`backend/bean/subtitle_area.py`
-- **规模**：55 行
-- **职责**：定义归一化矩形选区的数据载体 `SubtitleArea`，同时被 UI 的视频选区交互和后端 OCR 流程使用。四个坐标字段加一个可选的帧范围字段 `ab_section`，提供归一化、判空、宽高、A-B 区间判断与转 shapely 多边形的方法。
-- **字段与方法**：
+### backend/tools/__init__.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/__init__.py`
+- **规模**：0 行（空文件）
+- **职责**：包标记文件，使 `backend.tools` 成为可导入的 Python 包。无导入、无副作用代码。
+- **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `@dataclass class SubtitleArea` | 6-7 | 数据类声明 |
-| `ymin` / `ymax` / `xmin` / `xmax` | 11-14 | 四个边界，`Union[int, float]`（比例或像素） |
-| `ab_section: range = None` | 16 | 可选 A-B 帧区间，默认 `None` 表示不分区 |
-| `__init__(ymin, ymax, xmin, xmax, ab_section=None)` | 18-25 | 手写构造函数，覆盖 dataclass 自动生成的版本，逐个赋值五个字段 |
-| `normalized()` | 27-31 | **原地**交换：若 `xmin > xmax` 交换 X；若 `ymin > ymax` 交换 Y；无返回值 |
-| `is_empty()` | 33-34 | 四值全为 0 时返回 True |
-| `width`（`@property`） | 36-38 | 返回 `xmax - xmin` |
-| `height`（`@property`） | 40-42 | 返回 `ymax - ymin` |
-| `in_ab_section(frame_idx)` | 44-52 | `ab_section is None` 时返回 `True`；否则返回 `frame_idx in self.ab_section` |
-| `to_polygon()` | 54-55 | 用 `shapely.geometry.Polygon` 构造四点多边形 `[(xmin,ymin),(xmax,ymin),(xmax,ymax),(xmin,ymax)]` |
+|------|------|------|
+| （无类/函数） | — | 空文件，仅起包标识作用 |
 
-- **`in_ab_section(frame_idx)` 的最终逻辑**（44-52）：`if self.ab_section is None: return True`——未设置分区时该选区对所有帧有效（默认行为，与构造默认值 `None` 一致）；否则 `return frame_idx in self.ab_section`——仅当帧号落入该 `range` 才有效。UI 侧 `ab_section` 由 `video_display_component` 绑定为 `range(start, end)`（862、909 行）或解绑为 `None`（907、913 行），与此处的 `range` 成员判断语义一致；`range` 的 `in` 为 O(1) 成员测试。消费方 `video_display_component.py:262,267,296,435,665` 依赖该方法决定是否对当前帧应用选区，其中 300/307 行还显式判断 `rect.ab_section is not None` 以决定是否绘制分区标注。
-- **调用关系**：被 `ui/component/video_display_component.py` 导入（用于 `selection_rect`(25)、`selection_rects`，并在 480、563、580、604、638、722、744、783 行构造/归一化），以及 `backend/main.py`(34 行附近) 导入用于构造字幕区域；依赖第三方库 `shapely.geometry.Polygon`(4)。
-- **依赖与数据流**：UI 画选区时写入归一化比例（0~1），经 `config.subtitleSelectionAreas`(config.py:49) 以字符串持久化，再由 `video_display_component.py:726,744` 还原为 `SubtitleArea` 实例（744 行构造时不传 `ab_section`，故还原出的选区对所有帧有效）；`ab_section` 承载可选的时间分段语义，由任务选项 `TaskOptions.AB_SECTIONS` 在任务间传递（`ui/home_interface.py:158-162,179-180`）。
-- **维护与重构注意点**：
-  - **dataclass 形同虚设**：手写 `__init__`(18-25) 覆盖了自动生成版本，字段声明(11-16)与手写签名重复。若改为 `field(default=None)` 并删除手写构造函数，可减少同步成本。
-  - **`None` 与空区间语义不同**：`ab_section is None` 表示"不分区、全帧有效"，而 `range(0, 0)` 表示"没有任何帧有效"。重构时不要把两者混为一谈，也不要把 `ab_section` 换成非 `range` 类型却保留 `in` 判断，以免帧过滤行为变化。
-  - **潜在死代码**：全仓库检索未发现 `to_polygon()`(54-55) 的调用方；若确为遗留，可连带移除 `shapely` 依赖，降低安装体积。
-  - **`normalized()` 是原地修改且无返回值**(27-31)：调用点（`video_display_component.py:580,604,783` 等）必须显式调用，漏调会得到负的 `width`/`height`(36-42)，且没有防御性校验。
-  - **`is_empty()` 语义脆弱**(33-34)：仅在四值全 0 时为真，而归一化坐标下 0 是合法的顶边/左边值；绘制流程依赖它判断是否完成绘制，边界情况下可能误判。
-  - **同名类冲突**：本文件的 `SubtitleArea`（数据类）与 `backend/tools/constant.py:5` 的 `SubtitleArea`（Enum）同名不同义。`backend/main.py` 导入 bean 版，`backend/config.py:6`、`backend/tools/subtitle_ocr.py:8` 导入 constant 版，重构时极易误改，建议重命名其一（如 `SubtitleRect` / `SubtitleRegionPreset`）。
+- **调用关系**：在 `import backend.tools.<module>`（如 `backend.tools.ocr`、`backend.tools.onnx_ocr`）时由 Python 自动执行初始化；本模块自身不导入任何对象。
+- **实现细节**：文件内容为空，不注册任何属性、不改写 `sys.path`、不做延迟导入。
+- **维护注意点**：保持为空是安全的；不要在此加入模型加载、`onnxruntime` 初始化等重副作用逻辑，否则任何 `tools` 子模块的导入都会触发，拖慢 GUI 启动并影响多进程 `spawn` 行为。
 
 ---
 
 ### backend/tools/constant.py
-- **路径**：`backend/tools/constant.py`
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/constant.py`
 - **规模**：30 行
-- **职责**：集中定义跨模块共享的枚举和 OpenCV BGR 颜色常量。提供字幕区域预设、字幕背景色预设、VideoSubFinder 解码器枚举，以及调试绘图用的四个 BGR 颜色元组。
-- **全部枚举与取值**：
+- **职责**：定义字幕区域、字幕背景、视频解码器三组枚举，以及四个 BGR 颜色常量，供抽帧、OCR 与调试绘图共享。
+- **关键类/函数**：
 
-| 枚举/常量（行号） | 成员 | 取值 | 说明 | 读取方 |
-|---|---|---|---|---|
-| `SubtitleArea(Enum)` (5-13) | `LOWER_PART` (7) | `0` | 字幕在下半部分 | `backend/config.py:6,62`；`backend/tools/subtitle_ocr.py:8,289` |
-| | `UPPER_PART` (9) | `1` | 字幕在上半部分 | `subtitle_ocr.py:294` |
-| | `UNKNOWN` (11) | `2` | 未知位置（config 默认值） | `backend/config.py:62` |
-| | `CUSTOM = 3` (13) | — | 整行被注释，未启用 | — |
-| `BackgroundColor(Enum)` (16-20) | `WHITE` (18) | `0` | 字幕背景为白 | 全仓库无引用 |
-| | `DARK` (19) | `1` | 深色背景 | 全仓库无引用 |
-| | `UNKNOWN` (20) | `2` | 未知背景 | 全仓库无引用 |
-| `VideoSubFinderDecoder(Enum)` (23-25) | `OPENCV` (24) | `"OpenCV"` | 用 OpenCV 解码（config 默认值） | `backend/config.py:6,98`；`ui/advanced_setting_interface.py:16,209`；`backend/main.py:490,509` |
-| | `FFMPEG` (25) | `"FFmpeg"` | 用 FFmpeg 解码 | 同上 |
-| `BGR_COLOR_GREEN` (27) | — | `(0, 0xff, 0)` | 调试框/标注绿色（选中） | `subtitle_ocr.py:104` |
-| `BGR_COLOR_BLUE` (28) | — | `(0xff, 0, 0)` | 调试框蓝色 | `subtitle_ocr.py:101` |
-| `BGR_COLOR_RED` (29) | — | `(0, 0, 0xff)` | 调试框红色（未选中） | `subtitle_ocr.py:104` |
-| `BGR_COLOR_WHITE` (30) | — | `(0xff, 0xff, 0xff)` | 白色 | 全仓库无引用 |
+| 名称 | 行号 | 说明 |
+|------|------|------|
+| `SubtitleArea` | 5-13 | 字幕大致区域枚举：`LOWER_PART=0`、`UPPER_PART=1`、`UNKNOWN=2`（`CUSTOM=3` 已注释） |
+| `BackgroundColor` | 16-20 | 字幕背景枚举：`WHITE=0`、`DARK=1`、`UNKNOWN=2` |
+| `VideoSubFinderDecoder` | 23-25 | 解码器枚举：`OPENCV="OpenCV"`、`FFMPEG="FFmpeg"`（值为字符串） |
+| `BGR_COLOR_GREEN` | 27 | `(0, 0xff, 0)`，调试图"保留"标记 |
+| `BGR_COLOR_BLUE` | 28 | `(0xff, 0, 0)`，调试图字幕区域框 |
+| `BGR_COLOR_RED` | 29 | `(0, 0, 0xff)`，调试图"丢弃"标记 |
+| `BGR_COLOR_WHITE` | 30 | `(0xff, 0xff, 0xff)` |
 
-- **调用关系**：仅依赖标准库 `enum`(1)。被 `backend/config.py:6`（`SubtitleArea`、`VideoSubFinderDecoder`）、`backend/tools/subtitle_ocr.py:8`（`SubtitleArea`，且经 `constant.BGR_COLOR_*` 使用颜色）、`ui/advanced_setting_interface.py:16`（`VideoSubFinderDecoder`）导入。`backend/main.py` 通过 `config.subtitleArea.value` / `config.videoSubFinderDecoder.value` 间接使用这些枚举。
-- **依赖与数据流**：`SubtitleArea` 与 `VideoSubFinderDecoder` 的值会被 `EnumSerializer` 序列化进 `config/config.json`（前者为整数、后者为字符串）；`backend/main.py:490,509` 对 decoder 取 `.value.lower()` 拼接 `--open_video_opencv/ffmpeg` 命令行参数；`subtitle_ocr.py:289,294` 根据 `SubtitleArea` 裁剪检测区域。
-- **维护与重构注意点**：
-  - `BackgroundColor`(16-20) 与 `BGR_COLOR_WHITE`(30) 全仓库无引用，属于早期背景色检测逻辑的遗留，可归档或删除。
-  - `SubtitleArea.CUSTOM` 被注释(13)，而 `config.subtitleSelectionAreas`(config.py:49) 已支持任意自定义选区，两者概念重叠；应明确"预设区域枚举"与"自定义选区"的边界，避免两套机制并存。
-  - **与 bean 版 `SubtitleArea` 同名**（见 subtitle_area.py 的注意点），是本仓库最容易误读的命名点。
-  - 枚举值类型混用：`SubtitleArea`/`BackgroundColor` 为 `int`，`VideoSubFinderDecoder` 为 `str`；处理旧版 config.json 或迁移配置格式时要分别做类型兼容。
-  - 颜色常量是 **BGR 顺序**（OpenCV），但常量名只写 COLOR，容易被误当 RGB；建议在注释中强调或在新增 RGB 常量时显式区分。
-  - 文件无模块 docstring 与 `__all__`；作为公共常量模块，补充导出清单有助于重构时判断哪些符号可安全删除。
-
-## 二、核心引擎 backend/main.py
-
-（本节概览）`backend/main.py` 是整个 VSE 硬字幕提取器的**核心编排引擎**，定义了唯一的业务类 `SubtitleExtractor`。它把"视频帧采样 → OCR 识别 → 字幕去重/过滤 → SRT 生成"整条流水线串起来：主进程负责按三种策略（fps 跳帧采样 / det 逐帧检测比对 / 调用 videoSubFinder）投喂任务，OCR 在独立子进程中通过 `multiprocessing.Queue` 异步消费，主进程再用监听器回调把三段进度（抽帧 100 + OCR 100 + 后处理 100 = 300）回传给 UI。整体是"生产者—消费者 + 多进程 + 回调通知"的异步架构。当前最终代码的特征需要接手人特别注意：`run()` 用 `try/finally` 保护锁的释放；无 stdin 的交互由 `_safe_input()` 统一兜底为返回空串；`accurate` 模式无条件走自研逐帧检测；`manage_process(self, pid)` 为实例方法但当前是空实现；坐标容差比较统一使用 `.value`；缩略图缩放使用 `Image.Resampling.LANCZOS`。全文共 1131 行，入口在 `1116-1131`。
-
-### 模块导入与全局结构
-
-- **导入清单**（按来源分组，行号为导入语句位置）：
-  - 标准库：
-    - `os` / `shutil` / `pathlib.Path` / `sys`：`os`(8)、`shutil`(11)、`Path`(16)、`sys`(22) 用于路径拼装、目录删除；第 24 行 `sys.path.insert(0, os.path.dirname(__file__))` 把 `backend/` 加入模块搜索路径；tqdm 用 `sys.__stdout__`(277) 作为输出流。
-    - `re`(9)：`extract_frame_by_vsf` 中解析 videoSubFinder 输出文件名的时间戳正则（第 402 行）。
-    - `random`(10)：`filter_watermark` / `filter_scene_text` 随机抽取预览帧（第 532、593 行）。
-    - `traceback`(12)：`notify_progress_listeners` 捕获监听器异常并打印（第 1110 行）。
-    - `from collections import Counter, namedtuple`(13)：`Counter` 统计水印/字幕区域频率（第 719、738 行），`namedtuple('RawInfo', 'no content')` 承载去重中间结构（第 768 行）。
-    - `unicodedata`(14)：`_concat_content_with_same_frameno` 用 `NFKC` 归一化合并后文本（第 837 行）。
-    - `from threading import Thread`(15) 与 `import threading`(35)：`threading.RLock()` 保护 `run()`（第 48 行）；`Thread` 启动 OCR 进度监听线程（第 1051 行）与 VSF 输出监听线程（第 494、515 行）。
-    - `multiprocessing`(37)：入口设 `spawn` 启动方式（第 1117 行）、`cpu_count()` 计算 VSF 线程数（第 480、483 行）。
-    - `platform`(36)：判定 Windows/Linux/Darwin 选择抽帧路径（第 140 行）与 VSF 可执行文件（第 463-470、486、503 行）。
-    - `subprocess`(25)：`extract_frame_by_vsf` 启动外部 VideoSubFinder 进程（第 496、512 行）。
-    - `time`(38)：`run()` 记录耗时（第 109、192 行），VSF 轮询 `sleep(0.2)`（第 404 行）。
-    - `pysrt`(39)：读写 SRT（第 657、683、1055 行）。
-  - 第三方库：
-    - `cv2`(17)：所有视频帧读取/写入、画框、缩放操作（贯穿全文）。
-    - `from Levenshtein import ratio`(18)：文本相似度判定，用于去重（第 792 行）和 OCR 结果比对（第 948 行）。
-    - `from PIL import Image`(19)：`__get_thum` 缩略图（第 970 行，用 `Image.Resampling.LANCZOS`；注：该方法当前属于无调用路径，见风险点）。
-    - `from numpy import average, dot, linalg`(20)：`_compute_image_similarity` 余弦相似度（第 894、898、902 行，同样属于无调用路径）。
-    - `tqdm`(21)：抽帧进度条（第 277 行）。
-  - 项目内模块（`backend.*`）：
-    - `from backend.config import *`(26)：把 `config`、`tr`、`BASE_DIR` 全部注入命名空间，是全文配置与翻译字典的来源。
-    - `HardwareAccelerator`(27)：硬件加速单例（第 51-53 行）。
-    - `from backend.tools import reformat`(28)：分词后处理 `reformat.execute`（第 191 行）。
-    - `from backend.tools.ocr import OcrRecogniser, get_coordinates`(29)：OCR 预测与检测框坐标转换（第 284、298、910 行等）。
-    - `from backend.tools import subtitle_ocr`(30)：OCR 子进程入口 `async_start`（第 1045 行）。
-    - `PaddleModelConfig`(31)：解析 DET/REC 模型路径（第 54 行）。
-    - `ProcessManager`(32)：单例进程管理器，注册外部进程以便退出时清理（第 498、516、1046 行）。
-    - `SubtitleDetect`(33)：字幕区域检测（第 56、294 行）。
-    - `SubtitleArea`（`backend.bean.subtitle_area`，第 34 行）：入口处构造用户选区（第 1124 行）。
-
-- **入口**（`if __name__ == '__main__':`，第 1116-1131 行）：
-  - 第 1117 行 `multiprocessing.set_start_method("spawn")`：显式使用 spawn，避免 fork 下的 CUDA/SSL 等继承问题，配合 OCR 子进程。
-  - 第 1119 行 `input(f"{tr['Main']['InputVideo']}").strip()`：CLI 提示输入视频路径（阻塞）。
-  - 第 1121-1126 行：提示输入字幕区域 `ymin ymax xmin xmax`，`map(int, ...)` 解析并构造 `SubtitleArea(y_min, y_max, x_min, x_max)`；解析失败（`ValueError`）则 `subtitle_area = None`（走无选区路径）。注意参数顺序是 `ymin, ymax, xmin, xmax`，与 `SubtitleArea` 构造签名一致。
-  - 第 1128-1129 行：构造 `se = SubtitleExtractor(video_path)` 并赋值 `se.sub_area = subtitle_area`。
-  - 第 1131 行 `se.run()`：启动整条流水线。
-  - 无 CLI 参数解析（argparse/click 均未用），纯交互式 stdin。
-
-### SubtitleExtractor 类
-
-- **构造参数与初始化属性**（`__init__`，第 46-102 行；唯一构造参数 `vd_path`：视频文件路径）：
-
-| 属性名 | 行号 | 类型/默认值 | 用途 |
-| --- | --- | --- | --- |
-| `lock` | 48 | `threading.RLock()` | 保护 `run()` 全流程的互斥锁；`run()` 第 110 行 acquire、第 199 行 finally 中 release |
-| `sub_area` | 50 | `None`，可注入 `SubtitleArea` | 用户指定的字幕区域，决定抽帧路径；`None` 表示不指定 |
-| `hardware_accelerator` | 51 | `HardwareAccelerator.instance()` 单例 | 探测/配置 GPU（CUDA/DirectML 等）加速 |
-| （加速开关） | 53 | `set_enabled(config.hardwareAcceleration.value)` | 按配置启用/禁用硬件加速 |
-| `model_config` | 54 | `PaddleModelConfig(self.hardware_accelerator)` | 解析 DET/REC 模型路径与名称 |
-| `sub_detector` | 56 | `SubtitleDetect()` | 字幕区域检测器，供 `extract_frame_by_det` 使用 |
-| `video_path` | 58 | `vd_path` | 原始视频路径 |
-| `video_cap` | 59 | `cv2.VideoCapture(vd_path)` | 主进程视频句柄；VSF 路径会置 `None` |
-| `vd_name` | 61 | `Path(video_path).stem` | 视频文件名（不含扩展名），用于临时目录命名 |
-| `temp_output_dir` | 63 | `output/{vd_name}`（基于 `BASE_DIR` 上级） | 所有中间产物根目录 |
-| `frame_count` | 65 | `video_cap.get(CAP_PROP_FRAME_COUNT)`（float） | 视频总帧数 |
-| `fps` | 67 | `video_cap.get(CAP_PROP_FPS)`（float） | 帧率，用于采样间隔、时间码换算 |
-| `frame_height` | 69 | `int(...CAP_PROP_FRAME_HEIGHT)` | 帧高，VSF 归一化坐标用 |
-| `frame_width` | 70 | `int(...CAP_PROP_FRAME_WIDTH)` | 帧宽，VSF 归一化坐标用 |
-| `frame_output_dir` | 72 | `temp_output_dir/frames` | 提取帧目录（实际主路径不直接写帧，VSF 用其同级目录） |
-| `subtitle_output_dir` | 74 | `temp_output_dir/subtitle` | 字幕中间文件目录 |
-| `use_vsf` | 76 | `False` | 是否走了 videoSubFinder 路径，决定后续用哪种字幕生成方法 |
-| `vsf_subtitle` | 78 | `subtitle_output_dir/raw_vsf.srt` | VSF 直接产出的原始 SRT |
-| `raw_subtitle_path` | 80 | `subtitle_output_dir/raw.txt` | OCR 子进程产出的原始文本（帧号\t坐标\t文本） |
-| `subtitle_output_path` | 82 | `os.path.splitext(video_path)[0] + '.srt'` | 最终 SRT 输出路径（与视频同名） |
-| `ocr` | 84 | `None`（惰性创建 `OcrRecogniser`） | det 路径主线程内预判 OCR 用（第 284-285 行） |
-| `progress_total` | 86 | `300` | 总进度基数 = 抽帧 100 + OCR 100 + 后处理 100 |
-| `progress_frame_extract` | 88 | `0` | 抽帧进度（0-100） |
-| `progress_ocr` | 90 | `0` | OCR 进度（0-100） |
-| `progress_post` | 92 | `0` | 后处理进度（0-100） |
-| `isFinished` | 94 | `False` | 完成标志；第 195 行置 True |
-| `subtitle_ocr_task_queue` | 96 | `None`，运行时由 `start_subtitle_ocr_async` 赋值（第 1048 行） | 主进程 → OCR 子进程的任务队列 |
-| `subtitle_ocr_progress_queue` | 98 | `None`，同上（第 1049 行） | OCR 子进程 → 主进程的进度队列 |
-| `vsf_running` | 100 | `False` | VSF 子进程运行标志，控制 `count_process` 轮询循环（第 403 行） |
-| `progress_listeners` | 102 | `[]` | 进度回调监听器列表 |
-
-- **方法逐一详解**：
-
-#### `__init__(self, vd_path)` — 第 46-102 行
-- **职责**：初始化一个字幕提取任务所需的全部状态：硬件/模型、视频句柄与元数据、所有输入输出路径、三段进度计数器、跨进程队列占位与监听器列表。
-- **参数/输入**：`vd_path`（视频文件路径）。
-- **关键步骤**：
-  1. 第 48-50 行建 `RLock`，`sub_area = None`。
-  2. 第 51-53 行取硬件加速单例并按 `config.hardwareAcceleration.value` 设置开关。
-  3. 第 54-56 行构造 `PaddleModelConfig` 与 `SubtitleDetect`。
-  4. 第 58-70 行打开 `cv2.VideoCapture` 并读取 `frame_count` / `fps` / `frame_height` / `frame_width` 四项元数据。
-  5. 第 72-82 行拼装所有目录与文件路径。
-  6. 第 84-102 行初始化惰性 OCR、三段进度、完成标志、队列占位、监听器。
-- **输出/副作用**：打开视频文件句柄（需在抽帧结束或 VSF 路径释放）；计算全部派生路径。
-- **调用者/被调用者**：被入口第 1128 行调用；内部调用 `HardwareAccelerator.instance`、`PaddleModelConfig`、`SubtitleDetect` 的构造。
-- **风险点**：第 59 行若视频打不开，`video_cap` 仍被创建但 `isOpened()` 为 False，`frame_count/fps` 可能为 0 或 NaN，导致后续除零（`frame_interval = int(self.fps // ...)`，第 243 行）；构造函数不做任何视频有效性校验。
-
-#### `run(self)` — 第 104-201 行
-- **职责**：编排整条提取流水线（加锁 → 重置进度 → 打印信息 → 清缓存建目录 → 抽帧 → 启动并等待 OCR 子进程 → 水印/场景文字过滤 → 生成 SRT → 分词 → 收尾清理 → 释放锁 → 可选导出 TXT）。
-- **参数/输入**：无（依赖实例属性与全局 config/tr）。
-- **关键步骤**：
-  1. 第 109 行记录 `start_time`；第 110 行 `self.lock.acquire()`；第 111 行进入 `try:`。
-  2. 第 113 行 `update_progress(ocr=0, frame_extract=0, post=0)` 重置进度。
-  3. 第 116 行打印识别语言/模式；第 118-119 行 GPU 提示；第 122-123 行帧数/帧率；第 125 行 DET/REC 模型名。
-  4. 第 130 行 `__delete_frame_cache()` 清旧缓存；第 132-135 行创建 `frame_output_dir` 与 `subtitle_output_dir`。
-  5. 第 136 行 `capture_frame_with_subtitle_area()` 画选区预览图。
-  6. 第 138 行 `start_subtitle_ocr_async()` 启动 OCR 子进程，返回进程对象。
-  7. 第 139-150 行按条件选择抽帧路径（详见"三种抽帧路径对比表"）：`accurate` 走 `extract_frame_by_det()`（144）、其它模式走 `extract_frame_by_vsf()`（146）、非主流平台或无选区走 `extract_frame_by_fps()`（148/150）。
-  8. 第 154 行向任务队列投结束标志 `(frame_count, -1, None, None, None, None)`；第 156 行 `subtitle_ocr_process.join()` 等待 OCR 进程。
-  9. 第 161-169 行：`sub_area is None` 时打印水印提示（162），用 `self._safe_input(...)`（164）询问，输入 `y` 则 `filter_watermark()`（166）。
-  10. 第 171-174 行：`sub_area is None` 时 `filter_scene_text()`（173）。
-  11. 第 176 行 `update_progress(post=20)`。
-  12. 第 181-186 行：按 `use_vsf` 选 `generate_subtitle_file_vsf()`（183）或 `generate_subtitle_file()`（186）。
-  13. 第 188 行 `update_progress(post=90)`。
-  14. 第 190-191 行：若 `config.wordSegmentation.value` 调 `reformat.execute(...)`。
-  15. 第 192-195 行打印耗时、`update_progress(ocr=100, frame_extract=100, post=100)`（194）、`isFinished = True`（195）。
-  16. 第 196-197 行注释"删除缓存"并调用 `empty_cache()`。
-  17. 第 198-199 行 `finally:` 中 `self.lock.release()` —— 无论 try 块正常或异常结束都保证释放锁。
-  18. 第 200-201 行：`finally` 之后，若 `config.generateTxt.value` 调 `srt2txt()`（注意此步在锁外执行）。
-- **输出/副作用**：最终 SRT（及可选 TXT）；清理/重建 `temp_output_dir`；加锁/解锁；启动并等待一个 OCR 子进程。
-- **调用者/被调用者**：入口第 1131 行调用；内部调用本类绝大多数其他方法（见各方法"调用者"）。
-- **风险点**：`try/finally` 仅覆盖第 111-197 行，`finally` 只保证 `lock.release()`；`empty_cache()`（197）与 `isFinished=True`（195）在 try 内，异常路径仍会跳过，缓存残留且 `isFinished` 不置位；第 200-201 行在锁外，异常时同样不执行。第 125 行模型路径为 None 会抛 `TypeError`。多处以 `sub_area is None` 作为"无选区"路径的唯一判据。
-
-#### `capture_frame_with_subtitle_area(self)` — 第 203-236 行
-- **职责**：读取视频第一帧，若用户指定了 `sub_area` 则在帧上绘制绿色字幕框与 "Subtitle Area" 文字，保存为 `temp_output_dir/sub_area.jpg` 供用户核对选区。
-- **参数/输入**：无（用 `self.sub_area` / `video_cap`）。
-- **关键步骤**：
-  1. 第 208-209 行确保 `temp_output_dir` 存在。
-  2. 第 212-213 行若 `video_cap` 未打开则重新 `VideoCapture(video_path)`。
-  3. 第 219 行 `read()` 第一帧（第 216 行注释掉的 `set(POS_FRAMES, 0)` 原会复位，现依赖第 236 行复位）。
-  4. 第 221-229 行若 `sub_area is not None`（224），画绿色矩形（226）与文字（228-229）。
-  5. 第 232-233 行 `cv2.imwrite` 保存 `sub_area.jpg`。
-  6. 第 236 行把视频指针复位到第 0 帧（供后续抽帧从头开始）。
-- **输出/副作用**：写出 `sub_area.jpg`；复位视频指针；可能重开 `video_cap`。
-- **调用者/被调用者**：被 `run()` 第 136 行调用；内部调用 `cv2.rectangle/putText/imwrite`。
-- **风险点**：第 219 行未检查 `ret`，若首帧读取失败会拿 `None` 去画框/保存而抛错；第 212-213 行重开后未校验 `isOpened()`。
-
-#### `extract_frame_by_fps(self)` — 第 238-264 行
-- **职责**：最快速但易漏字的抽帧路径——按固定帧间隔跳帧采样，把每个采样帧封装为任务投入 OCR 队列。
-- **参数/输入**：无（用 `fps`、`extractFrequency`、`frame_count`）。
-- **关键步骤**：
-  1. 第 243 行 `frame_interval = int(self.fps // config.extractFrequency.value)`；第 244-245 行保证至少为 1。
-  2. 第 247-248 行初始化 `current_frame_no = 0`、`total_frames = int(frame_count)`。
-  3. 第 249-262 行循环：
-     - 第 251 行 `set(CAP_PROP_POS_FRAMES, current_frame_no)` 直接跳转；第 252 行 `read()`；失败（253-254）则 break。
-     - 第 255 行帧号自增；第 257 行组装 6 元组 `(frame_count, current_frame_no, None, None, None, config.subtitleArea.value)` 并入队（258）。
-     - 第 260 行 `update_progress(frame_extract=(current_frame_no/frame_count)*100)`。
-     - 第 262 行 `current_frame_no = current_frame_no + frame_interval - 1`（配合第 255 行 +1，等价于每次前进 `frame_interval`）。
-  4. 第 264 行 `video_cap.release()`。
-- **输出/副作用**：持续向 `subtitle_ocr_task_queue` 投帧任务；更新抽帧进度；最后释放视频句柄。
-- **调用者/被调用者**：被 `run()` 第 148、150 行调用；下游消费者是 `subtitle_ocr.ocr_task_producer`。
-- **风险点**：`dt_box/rec_res/total_ms` 均为 `None`，OCR 完全在子进程完成；跳帧可能漏掉短暂字幕；`release()` 在正常路径末尾，中途异常则不执行。
-
-#### `extract_frame_by_det(self)` — 第 266-387 行
-- **职责**：精准抽帧路径——逐帧检测字幕区域，通过 OCR 文本比对识别字幕的"头帧/尾帧"，只把字幕区间的关键帧（头、尾）投给 OCR，减少无效识别。
-- **参数/输入**：无（用 `sub_detector`、惰性 `self.ocr`、`frame_count`、`sub_area`）。
-- **关键步骤**：
-  1. 第 271-283 行初始化状态：`frame_lru_list`（上限 2）、`ocr_args_list`、`compare_ocr_result_cache`、tqdm、`first_flag`、`is_finding_start/end_frame_no`、`start_frame_no`、`start_end_frame_no`、`start_frame`。
-  2. 第 284-285 行惰性创建 `OcrRecogniser`。
-  3. 第 286-375 行逐帧主循环（`while video_cap.isOpened()`）：
-     - 第 292-294 行帧号自增、tqdm 推进、`sub_detector.detect_subtitle(frame)` 得到 `dt_boxes`。
-     - 第 295-312 行：若有 `sub_area`（297），用 `get_coordinates(dt_boxes.tolist())` 取坐标，判断检测框是否整体落在选区内（302-304），命中则置 `has_subtitle=True` 并在 `first_flag` 时进入"找头"状态（307-309）；无 `sub_area` 时（311-312）`has_subtitle = len(dt_boxes) > 0`。
-     - 第 314-346 行有字幕分支：找头（316-328）时记录 `start_frame_no`（317）、OCR 预判头帧文本（318-319）、写缓存 `compare_ocr_result_cache[current_frame_no]`（321）、存 `start_frame`（325）、转入找尾（327-328）；第 330-336 行特判末帧；第 338-346 行找尾时用 `_compare_ocr_result(compare_ocr_result_cache, None, start_frame_no, frame, current_frame_no)`（340）比较头尾文本，不一致则把 `end_frame_no = current_frame_no - 1`（343）入队并记录区间。
-     - 第 348-356 行无字幕分支：若正在找尾则把前一帧作为尾帧（351）入队并复位状态。
-     - 第 358-359 行 `frame_lru_list` 保持最多 2 项。
-     - 第 364-375 行 `ocr_args_list` 超过 1 时 pop 一项，以 `current_frame_no` 查缓存取 `dt_box/rec_res`（366-370，未命中则 None），组装 6 元组（372）入队（374）并更新进度（375）。
-  4. 第 377-386 行循环结束后把 `ocr_args_list` 剩余项全部入队（同样以 `current_frame_no` 查缓存，379-383）。
-  5. 第 387 行 `video_cap.release()`。
-- **输出/副作用**：把字幕头/尾帧（含预计算 OCR 结果）投给 OCR 队列；更新抽帧进度；tqdm 输出。
-- **调用者/被调用者**：被 `run()` 第 144 行调用；内部调用 `SubtitleDetect.detect_subtitle`、`OcrRecogniser.predict`、`get_coordinates`、`_compare_ocr_result`、`__get_area_text`。
-- **风险点**：写缓存用 `current_frame_no`（321），入队时读取也用 `current_frame_no`（366/379），但入队项的 `ocr_info_frame_no` 是头/尾帧帧号，二者通常不一致，导致 `dt_box/rec_res` 多为 None，预计算 OCR 结果形同虚设；第 340 行把 `img1=None` 传入 `_compare_ocr_result`，虽头帧时以 `start_frame_no`（== 头帧的 `current_frame_no`）写了缓存可命中，但逻辑脆弱；该路径现由 `accurate` 模式无条件启用（不再依赖硬件加速），覆盖面较此前更广，需重点关注上述两点的稳定性。
-
-#### `extract_frame_by_vsf(self)` — 第 389-520 行
-- **职责**：调用外部 videoSubFinder（VSF）在指定字幕区域内检测并导出字幕帧，同时以两种方式（轮询 RGBImages 目录 / 解析 VSF stderr）获取进度并把帧任务投给 OCR 队列，并直接产出 `raw_vsf.srt`。
-- **参数/输入**：无（用 `sub_area`、帧/宽高、`hardware_accelerator`、config 的 VSF 选项）。
-- **关键步骤**：
-  1. 第 393-396 行置 `use_vsf=True`，释放并置空 `video_cap`。
-  2. 第 397-435 行内嵌 `count_process()`：每 0.2s（404）轮询 `temp_output_dir/RGBImages`，用正则 `^\d+_\d+_\d+_\d+__`（402）匹配文件名，解析 `h_m_s_ms` 得 `total_ms`（421-422），组装 6 元组（425，`total_ms` 非 None）入队（426）；按 `total_ms/duration_ms` 更新进度（428-432）；`FileNotFoundError` 时返回（434-435）。
-  3. 第 437-460 行内嵌 `vsf_output(out)`：逐行读 VSF 的 stderr，凡以 `Frame: ` 开头即解析 `h_m_s_ms`（446-447）同样入队（450-451）并更新进度（453-457），其余行 `append_output`（459），最后 `out.close()`（460）。
-  4. 第 463-470 行按平台选 VSF 可执行：Windows=`subfinder/windows/VideoSubFinderWXW.exe`（464）；Darwin=`subfinder/macos/VideoSubFinderCli`（466，`chmod 775`）；Linux=`subfinder/linux/VideoSubFinderCli.run`（469，`chmod 775`）。
-  5. 第 471-478 行把选区像素坐标归一化为百分比：`top_end=1-ymin/H`（472）、`bottom_end=1-ymax/H`（474）、`left_end=xmin/W`（476）、`right_end=xmax/W`（478）。
-  6. 第 479-485 行决定 CPU 核心数：无 CUDA 且有 onnx provider 用满核（479-480），否则 `cpu_count()-2`（至少 1，483）；`config.videoSubFinderCpuCores.value > 0` 时覆盖（484-485）。
-  7. 第 486-502 行 Windows 命令：拼 `--use_cuda -c -r -i ... -o ... -ces ... -te/-be/-le/-re ... -nthr/-nocrthr ... --open_video_{decoder}`（488-490）；`try` 内启动 `count_process` 守护线程（494）、`Popen(..., CREATE_NEW_PROCESS_GROUP)`（496-497）、注册进程（498）、`self.manage_process(p.pid)`（499）、`p.wait()`（500）；`finally` 复位 `vsf_running`（501-502）。第 495 行注释记录已知 BUG：网络盘上的 `test_chinese_cht.flv` 会导致 VSF 无法停止。
-  8. 第 503-520 行非 Windows 命令：按 `has_accelerator()` 决定是否 `--use_cuda`（506-507），含 `-dsi`（508），`Popen(..., shell=True, start_new_session=True)`（512-514），启动 `vsf_output(p.stderr)` 守护线程（515），注册进程（516），`self.manage_process(p.pid)`（517），`wait()`（518），`finally` 复位（519-520）。
-- **输出/副作用**：写出 `raw_vsf.srt`；持续投帧任务；更新抽帧进度。
-- **调用者/被调用者**：被 `run()` 第 146 行调用；内部调用 `ProcessManager.instance().add_process`、`self.manage_process`、`subprocess.Popen`、`os.chmod`。
-- **风险点**：`self.manage_process(p.pid)`（499/517）当前为空实现（见 `manage_process`），PID 上报无实际动作；命令用字符串拼接（488-490、505-509）且 POSIX 分支 `shell=True`（513），路径含空格/特殊字符有解析与注入风险；第 424/449 行 `frame_no = int(total_ms / self.fps)` 量纲不当（毫秒÷帧率≠帧号），但下游实际用 `total_ms` 定位故影响有限；`vsf_running` 由 `finally` 复位（502/520），异常路径能清标志，但 `p.wait()` 之前的异常仍可能遗留子进程（由 `ProcessManager` 兜底）。
-
-#### `filter_watermark(self)` — 第 521-580 行
-- **职责**：交互式去除 `raw.txt` 中被判定为水印（台标）区域的文本——先检测潜在水印区并在预览图上标注让用户判断，再按用户确认逐区删除。
-- **参数/输入**：无（用 `video_path`、`frame_count`、`raw_subtitle_path`）。
-- **关键步骤**：
-  1. 第 526 行 `_detect_watermark_area()` 取候选水印区域（`Counter` 频率最高的若干坐标）。
-  2. 第 529-537 行随机抽一帧（帧号在 10%-90% 间，最多试 10 次）作为预览帧，随后 `cap.release()`（537）。
-  3. 第 539-541 行读帧失败则报错返回。
-  4. 第 544-562 行用 `['E','D','C','B','A']` 给候选区编号，涂模糊并画红框（551-554）、标注文字（557-558），保存 `watermark_area.jpg`（560-561）并提示用户查看（562）。
-  5. 第 564-576 行再次遍历候选区，用 `self._safe_input(...)`（566）询问是否删除；确认（输入 `y`，第 568 行）则打开 `raw_subtitle_path` 读写，剔除坐标匹配的行并 `truncate()`（569-575）。
-  6. 第 577 行输出完成提示；第 579-580 行删除预览图。
-- **输出/副作用**：原地改写 `raw_subtitle_path`；写出并删除 `watermark_area.jpg`。
-- **调用者/被调用者**：被 `run()` 第 166 行调用；内部调用 `_detect_watermark_area`、`_safe_input`。
-- **风险点**：第 566 行 `_safe_input` 在有 stdin 时仍会阻塞等待用户；无 stdin 时返回空串（不匹配 `'y'`），该步骤被跳过——这是设计上的退化行为，需上层知晓；第 568 行 `user_input == '\n'` 因 `_safe_input` 内 `strip()`（1078）而永不成立；`raw.txt` 行格式变化时 `str(watermark_area[0])`（573）匹配易失效。
-
-#### `filter_scene_text(self)` — 第 582-627 行
-- **职责**：交互式过滤非字幕区域（场景文字）——检测字幕 y 范围并在预览图画出，让用户确认后仅保留该 y 范围内的 `raw.txt` 行。
-- **参数/输入**：无。
-- **关键步骤**：
-  1. 第 587 行 `_detect_subtitle_area()[0][0]` 取最常见的 y 坐标区间。
-  2. 第 590-598 行随机抽预览帧（同 `filter_watermark`）。
-  3. 第 600-602 行读帧失败则报错返回。
-  4. 第 605-606 行按 `config.subtitleAreaDeviationPixel.value` 扩展 y 范围（`ymin = abs(y0 - dev)`，`ymax = y1 + dev`）以兼容双行字幕。
-  5. 第 608-611 行画红框并保存 `subtitle_area.jpg` 提示查看。
-  6. 第 613 行用 `self._safe_input(...)` 询问；确认（614，输入 `y`）则逐行解析 `raw.txt` 的坐标字段（619-620 用 `split` 链取出 ymin/ymax），仅保留落在区间内的行（621-623）。
-  7. 第 626-627 行删除预览图。
-- **输出/副作用**：原地改写 `raw_subtitle_path`；写出并删除 `subtitle_area.jpg`。
-- **调用者/被调用者**：被 `run()` 第 173 行调用；内部调用 `_detect_subtitle_area`、`_safe_input`。
-- **风险点**：第 587 行假设 `_detect_subtitle_area()` 至少有 1 个结果，空文件会 `IndexError`；第 613 行 `_safe_input` 行为同上（有 stdin 阻塞 / 无 stdin 返回空串跳过过滤）；第 619-620 行强依赖 `raw.txt` 的 6 元坐标字符串格式，解析脆弱；第 614 行 `'\n'` 判断恒假。
-
-#### `generate_subtitle_file(self)` — 第 629-652 行
-- **职责**：常规（非 VSF）路径下生成最终 SRT：去重、把持续时间 < 1 秒的字幕强制拉长到 1 秒、写出标准 SRT 格式。
-- **参数/输入**：无（用 `raw_subtitle_path`、`fps`、`subtitle_output_path`）。
-- **关键步骤**：
-  1. 第 633 行非 VSF 才执行。
-  2. 第 634 行 `_remove_duplicate_subtitle()` 得到去重列表（元素为 `(start_frame, end_frame, content)`）。
-  3. 第 636 行建 `post_process_subtitle` 收集短于 1 秒的行号。
-  4. 第 637-649 行逐条写出：序号（639）、时间码（640 `_frame_to_timecode(content[0])`）；若 `abs(end-start) < fps`（642）则结束时间改为 `start+fps`（643）并记录行号（644），否则用 `content[1]`（646）；正文取 `content[2]`（647）。
-  5. 第 650 行输出 SRT 路径；第 652 行返回 `post_process_subtitle`。
-- **输出/副作用**：写出 `subtitle_output_path`（SRT）。
-- **调用者/被调用者**：被 `run()` 第 186 行调用；内部调用 `_remove_duplicate_subtitle`、`_frame_to_timecode`、`append_output`。
-- **风险点**：第 652 行返回的 `post_process_subtitle` 在 `run()` 中无人接收，"拉长到 1 秒"的二次后处理实际未接入；第 642 行比较用 `fps` 为浮点，边界行为需留意。
-
-#### `generate_subtitle_file_vsf(self)` — 第 654-684 行
-- **职责**：VSF 路径下生成 SRT——以 VSF 产出的 `raw_vsf.srt` 时间轴为基准，用 OCR 识别文本替换/补全字幕，产出最终 SRT。
-- **参数/输入**：无。
-- **关键步骤**：
-  1. 第 655-656 行非 VSF 直接返回。
-  2. 第 657 行 `pysrt.open(self.vsf_subtitle)` 读 VSF 原始 SRT。
-  3. 第 658-661 行给每条字幕计算 `start.no = _timestamp_to_frameno(start.ordinal)`，建 `sub_no_map`。
-  4. 第 663-664 行 `_remove_duplicate_subtitle()` 并建 `subtitle_content_start_map`（按起始帧索引）。
-  5. 第 666-681 行遍历 VSF 字幕：命中 OCR 起始帧则替换文本（670）、按结束帧更新 end（671-672）、重排 index（673）并加入结果（674）；未命中且 `not config.deleteEmptyTimeStamp.value`（676）则保留空文本时间轴（678-680）。
-  6. 第 683 行 `pysrt.SubRipFile(final_subtitles).save(...)` 保存；第 684 行输出路径。
-- **输出/副作用**：写出 `subtitle_output_path`（SRT）。
-- **调用者/被调用者**：被 `run()` 第 183 行调用；内部调用 `_remove_duplicate_subtitle`、`_timestamp_to_frameno`、`pysrt`。
-- **风险点**：第 672 行 `sub_no_map[end_no]` 依赖结束帧恰好也是某条字幕的起始帧，否则沿用 VSF 的 end；第 657 行 VSF 未产出文件会抛异常。
-
-#### `_detect_watermark_area(self)` — 第 686-721 行
-- **职责**：从 `raw.txt` 的坐标统计出"最可能是水印（台标）"的固定区域——假定水印坐标在水平/垂直方向都固定。
-- **参数/输入**：无（读 `raw_subtitle_path`）。
-- **关键步骤**：
-  1. 第 693-706 行一次性解析所有行，得 `(frame_no, coordinate, content)`；坐标解析用 `split('(')[1].split(')')[0].split(', ')` 转 4 个 int（702-705）。
-  2. 第 708-710 行拆出三个列表，对坐标列表调 `_unite_coordinates()`（712）做相似坐标归一。
-  3. 第 715-717 行把归一后的坐标**回写** `raw.txt`。
-  4. 第 719-721 行 `Counter(coordinates_list).most_common()`，取前 `min(config.waterarkAreaNum.value, len(count))`（720）个返回。
-- **输出/副作用**：原地改写 `raw.txt`（坐标归一）；返回候选水印区域列表 `[(coord, count), ...]`。
-- **调用者/被调用者**：被 `filter_watermark()` 第 526 行调用；内部调用 `_unite_coordinates`。
-- **风险点**：第 702 行坐标解析对 `raw.txt` 格式强依赖；`_unite_coordinates` 的并查集分组逻辑需回归测试以保证归一结果稳定。
-
-#### `_detect_subtitle_area(self)` — 第 723-738 行
-- **职责**：从过滤水印后的 `raw.txt` 统计出最常见的 y 坐标区间作为字幕区域（假定字幕 y 范围出现频率高于场景文字）。
-- **参数/输入**：无。
-- **关键步骤**：
-  1. 第 729-730 行读 `raw.txt`。
-  2. 第 732-737 行逐行解析出 `(ymin, ymax)` 加入列表。
-  3. 第 738 行 `Counter(y_coordinates_list).most_common(1)` 返回出现次数最多的 y 区间。
-- **输出/副作用**：只读；返回 `[( (ymin,ymax), count )]` 结构。
-- **调用者/被调用者**：被 `filter_scene_text()` 第 587 行调用。
-- **风险点**：空 `raw.txt` 返回空列表，调用方 `[0][0]`（587）会 `IndexError`；坐标解析格式强依赖。
-
-#### `_frame_to_timecode(self, frame_no)` — 第 740-753 行
-- **职责**：纯计算，把帧号换算为 SMPTE 时间码字符串 `HH:MM:SS,mmm`（不打开视频）。
-- **参数/输入**：`frame_no`（帧号）。
-- **关键步骤**：
-  1. 第 746 行 `total_ms = frame_no / self.fps * 1000`。
-  2. 第 747-752 行拆分出 `milliseconds / seconds / minutes / hours`。
-  3. 第 753 行格式化为 `%02d:%02d:%02d,%03d`。
-- **输出/副作用**：纯函数，无副作用；返回时间码字符串。
-- **调用者/被调用者**：被 `generate_subtitle_file()` 第 640、643、646 行调用。
-- **风险点**：用浮点除法再 `int()` 截断，极长视频可能有毫秒级误差；`fps` 为 0 会除零。
-
-#### `_timestamp_to_frameno(self, time_ms)` — 第 755-756 行
-- **职责**：把毫秒时间戳换算为帧号。
-- **参数/输入**：`time_ms`（毫秒）。
-- **关键步骤**：第 756 行 `return int(time_ms / self.fps)`。
-- **输出/副作用**：纯函数，返回 int 帧号。
-- **调用者/被调用者**：被 `generate_subtitle_file_vsf()` 第 660 行调用。
-- **风险点**：单位换算用 `fps` 而非 `fps/1000`，语义上毫秒÷帧率并非帧号（VSF 时间轴场景依赖此约定，需保持兼容）；`fps=0` 除零。
-
-#### `_frameno_to_milliseconds(self, frame_no)` — 第 758-759 行
-- **职责**：把帧号换算为毫秒。
-- **参数/输入**：`frame_no`。
-- **关键步骤**：第 759 行 `return float(int(frame_no / self.fps * 1000))`。
-- **输出/副作用**：纯函数，返回 float 毫秒。
-- **调用者/被调用者**：全类**无调用**（当前为无调用代码）。
-- **风险点**：未被使用；`fps=0` 除零。若日后启用需先明确是否删除或接入。
-
-#### `_remove_duplicate_subtitle(self)` — 第 761-811 行
-- **职责**：去除 `raw.txt` 中的重复字幕行——按文本相似度把连续相似行合并为一条，取其中最长的文本作为代表，返回 `(起始帧, 结束帧, 文本)` 列表；同时驱动后处理进度 20→85。
-- **参数/输入**：无。
-- **关键步骤**：
-  1. 第 765 行先 `_concat_content_with_same_frameno()` 合并同帧行。
-  2. 第 766-773 行读入并用 `namedtuple('RawInfo', 'no content')` 构建 `content_list`。
-  3. 第 775-811 行双指针去重：
-     - 第 776-777 行设 `last_reported_idx=-1`、`report_interval=max(1, len//100)`。
-     - 第 787-789 行定期 `update_progress(post=20 + int(65*idx_j/len))`（20→85）。
-     - 第 792 行用 `ratio(i.content去空格, next.content去空格) < threshold/100` 判定边界（不同则结束）；阈值来自 `config.thresholdTextSimilarity.value`。
-     - 第 794-798 行确定 `end_frame`；非 VSF 且单帧时（796-798）以下一帧帧号为结束帧（除非末帧）。
-     - 第 800-802 行在相似区间内取**最长**文本（802 `max(..., key=len)`）作为代表，加入结果（805）。
-     - 第 806 行推进 `idx_i = idx_j + 1`。
-  4. 第 811 行返回去重列表。
-- **输出/副作用**：更新 post 进度；返回去重后的字幕列表。
-- **调用者/被调用者**：被 `generate_subtitle_file()` 第 634 行、`generate_subtitle_file_vsf()` 第 663 行调用；内部调用 `_concat_content_with_same_frameno`、`update_progress`。
-- **风险点**：第 792 行相似度阈值是固定百分比；第 787 行进度更新依赖 `content_list_len`，空列表时 `max(1, 0//100)=1` 但循环不执行，post 停在 20；`ratio` 对超长文本性能敏感。
-
-#### `_concat_content_with_same_frameno(self)` — 第 813-838 行
-- **职责**：合并 `raw.txt` 中相同帧号的多行字幕为一行（用空格连接），并做 `NFKC` 归一化，保持原始帧顺序。
-- **参数/输入**：无。
-- **关键步骤**：
-  1. 第 817-818 行读 `raw.txt`。
-  2. 第 821-830 行用 `OrderedDict` 按 `frame_no` 分组，值为 `(coordinate, [contents])`。
-  3. 第 832-838 行回写：每组用 `' '.join(contents)` 合并（834），补换行（835-836），`unicodedata.normalize('NFKC', ...)`（837），写回 `frame_no\tcoordinate\tmerged`（838）。
-- **输出/副作用**：原地改写 `raw.txt`。
-- **调用者/被调用者**：被 `_remove_duplicate_subtitle()` 第 765 行调用。
-- **风险点**：第 824 行 `split('\t', 2)` 假设恰好 3 列，格式异常时跳过；`NFKC` 会改变全角字符，可能影响下游文本比对。
-
-#### `_unite_coordinates(self, coordinates_list)` — 第 840-880 行
-- **职责**：把检测出的相似坐标（同一位置文字多次检测值略有差异）统一为同一代表值，使用"按 xmin 排序 + 滑动窗口 + 并查集"实现。
-- **参数/输入**：`coordinates_list`（4 元坐标列表）。
-- **关键步骤**：
-  1. 第 848-849 行空列表直接返回。
-  2. 第 851-852 行 `indexed = sorted(enumerate(coords), key=x[1][0])` 按 xmin 排序（保留原索引）。
-  3. 第 854-866 行并查集 `parent` 及 `find`（路径压缩）、`union`（保留较小索引为代表）。
-  4. 第 868-875 行滑动窗口：右指针推进，左指针在 `indexed[right][1][0] - indexed[left][1][0] >= config.tolerantPixelX.value`（870）时右移；窗口内调 `__is_coordinate_similar`（874）相似则 `union`（875）。
-  5. 第 877-880 行把每个坐标替换为 `coordinates_list[find(i)]`（组代表坐标）后返回。
-- **输出/副作用**：纯计算，返回统一后的坐标列表。
-- **调用者/被调用者**：被 `_detect_watermark_area()` 第 712 行调用；内部调用 `__is_coordinate_similar`。
-- **风险点**：第 870 行比较使用 `config.tolerantPixelX.value`（已取 `.value`，类型正确）；并查集 `find(i)` 的 `i` 为原索引，逻辑成立，但分组代表的选择会影响回写坐标，建议为"相似坐标归一"补单元测试以固定行为。
-
-#### `_compute_image_similarity(self, image1, image2)` — 第 882-903 行
-- **职责**：计算两张图片的余弦相似度（先缩略图再转向量）。
-- **参数/输入**：`image1`、`image2`（PIL 图像）。
-- **关键步骤**：第 886-887 行 `__get_thum` 缩放；第 891-898 行逐像素 `average` 成向量并求 `linalg.norm`；第 902 行 `dot(a/a_norm, b/b_norm)` 返回余弦相似度。
-- **输出/副作用**：纯函数，返回 float 相似度。
-- **调用者/被调用者**：全类**无调用**（当前为无调用代码）。
-- **风险点**：当前无调用方；若日后启用需确认用途，并注意全黑/零范数图片会导致除零。
-
-#### `__get_area_text(self, ocr_result)` — 第 905-921 行
-- **职责**：给定 OCR 结果 `(dt_box, rec_res)`，提取落在 `sub_area` 内的文本片段列表。
-- **参数/输入**：`ocr_result = (box, text)`。
-- **关键步骤**：第 910 行 `get_coordinates(box)`；第 912-920 行遍历 `(content, coordinate)`，若坐标整体在 `sub_area` 内（919）则收集 `content[0]`（920）。
-- **输出/副作用**：纯函数，返回文本片段列表。
-- **调用者/被调用者**：被 `extract_frame_by_det()` 第 319 行、`_compare_ocr_result()` 第 933/940 行调用；内部调用 `get_coordinates`。
-- **风险点**：`sub_area is None` 时返回空列表（914-920 行仅处理有选区情况），det 路径要求 `sub_area` 非空故无碍。
-
-#### `_compare_ocr_result(self, result_cache, img1, img1_no, img2, img2_no)` — 第 923-951 行
-- **职责**：比较两帧字幕区域 OCR 文本是否相似（用于 det 路径判定字幕尾帧），带缓存与过期清理。
-- **参数/输入**：`result_cache`（帧号→结果的缓存）、`img1`/`img1_no`、`img2`/`img2_no`（两帧图像与帧号）。
-- **关键步骤**：
-  1. 第 927-928 行惰性创建 OCR。
-  2. 第 929-934 行：`img1_no` 命中缓存则取 `text`（930），否则 `ocr.predict(img1)`（932）并 `__get_area_text` 取文本（933）后写缓存（934）。
-  3. 第 936-941 行对 `img2` 同理（predict 在 939）。
-  4. 第 942-947 行清理 `no < min(img1_no,img2_no)-10` 的过期缓存项。
-  5. 第 948-951 行 `ratio(area_text1, area_text2) > threshold/100` 返回 True/False。
-- **输出/副作用**：修改 `result_cache`（写入新结果、删除过期项）。
-- **调用者/被调用者**：被 `extract_frame_by_det()` 第 340 行调用；内部调用 `OcrRecogniser.predict`、`__get_area_text`。
-- **风险点**：第 932/939 行当 `img1`/`img2` 为 None 且缓存未命中时会对 None 调 `predict` 崩溃；det 路径第 340 行传入 `img1=None`，依赖 `img1_no=start_frame_no` 命中头帧缓存，耦合较强——改动 det 路径缓存写入逻辑时需同步核对此处。
-
-#### `__is_coordinate_similar(coordinate1, coordinate2)` [staticmethod] — 第 953-962 行
-- **职责**：判断两个 4 元坐标是否相似——四个分量的差值分别小于 x/y 容忍像素。
-- **参数/输入**：`coordinate1`、`coordinate2`（`(xmin,xmax,ymin,ymax)`）。
-- **关键步骤**：第 959-962 行 `abs(c1[i]-c2[i]) < config.tolerantPixelX.value`（i=0,1）/ `config.tolerantPixelY.value`（i=2,3）。
-- **输出/副作用**：纯函数，返回 bool。
-- **调用者/被调用者**：被 `_unite_coordinates()` 第 874 行调用。
-- **风险点**：四处比较均使用 `.value`（959-962），类型正确；阈值由 `config.tolerantPixelX/Y` 决定，配置精度变化会影响水印/字幕区域判定，调整配置后建议回归测试。
-
-#### `__get_thum(image, size=(64,64), greyscale=False)` [staticmethod] — 第 964-974 行
-- **职责**：把图片统一缩放到固定尺寸（可选灰度），用于相似度计算。
-- **参数/输入**：`image`（PIL 图）、`size`、`greyscale`。
-- **关键步骤**：第 970 行 `image.resize(size, Image.Resampling.LANCZOS)`（高质量重采样）；第 971-973 行灰度转换 `convert('L')`。
-- **输出/副作用**：纯函数，返回变换后的 PIL 图。
-- **调用者/被调用者**：仅被当前无调用的 `_compute_image_similarity()` 第 886-887 行调用。
-- **风险点**：当前整体上属于无调用代码路径；`Image.Resampling.LANCZOS` 要求 Pillow ≥ 9.1，若部署环境 Pillow 版本过低会 `AttributeError`，需在依赖清单中固定 Pillow 版本。
-
-#### `__delete_frame_cache(self)` — 第 976-978 行
-- **职责**：强制删除整个 `temp_output_dir` 缓存目录（无视 debug 配置）。
-- **参数/输入**：无。
-- **关键步骤**：第 977-978 行存在则 `shutil.rmtree(path, True)`。
-- **输出/副作用**：删除磁盘目录。
-- **调用者/被调用者**：被 `run()` 第 130 行调用。
-- **风险点**：无条件删除，与 `empty_cache` 的 debug 保护不一致；调试时若想保留中间产物，此步仍会清空。
-
-#### `empty_cache(self)` — 第 980-986 行
-- **职责**：在任务成功后清理缓存，但受 `config.debugNoDeleteCache.value` 保护以便调试。
-- **参数/输入**：无。
-- **关键步骤**：第 984 行 `if not config.debugNoDeleteCache.value`；第 985-986 行删除 `temp_output_dir`。
-- **输出/副作用**：条件删除磁盘目录。
-- **调用者/被调用者**：被 `run()` 第 197 行调用（位于 try 块内）。
-- **风险点**：异常路径（try 块内第 197 行之前抛错）不会执行，缓存残留；与 `__delete_frame_cache` 的保护策略不一致。
-
-#### `update_progress(self, ocr=None, frame_extract=None, post=None)` — 第 988-1002 行
-- **职责**：更新三段进度（各自 clamp 到 0-100）并通知所有监听器。
-- **参数/输入**：`ocr` / `frame_extract` / `post`（可选，None 表示不变）。
-- **关键步骤**：
-  1. 第 995-996 行 `ocr` 经 `max(0, min(100, value))` clamp 后赋值。
-  2. 第 997-998 行 `frame_extract` 同理；第 999-1000 行 `post` 同理。
-  3. 第 1002 行 `notify_progress_listeners()`。
-- **输出/副作用**：修改三个进度属性；触发监听器回调。
-- **调用者/被调用者**：被 `run()`、三个抽帧方法、`get_ocr_progress`、`_remove_duplicate_subtitle` 调用；内部调用 `notify_progress_listeners`。
-- **风险点**：`progress_total=300` 写死；监听器回调异常虽被捕获（1110）但仅打印 traceback。
-
-#### `start_subtitle_ocr_async(self)` — 第 1004-1052 行
-- **职责**：启动 OCR 子进程并搭建进度回传通道：组装 options、调 `subtitle_ocr.async_start`、注册进程、建立两个队列、启动进度监听线程，返回进程对象。
-- **参数/输入**：无（读全局 config、硬件加速实例）。
-- **关键步骤**：
-  1. 第 1005-1037 行内嵌 `get_ocr_progress()`：阻塞从 `progress_queue` 取值（1015）；首次值打印 "StartFindSub"（1016-1018）；`(-2, total_tasks)` 记录总任务数（1020-1022）；`-1`（1024-1026）或 `(-1, ...)`（1027-1029）终止并置 `ocr=100`；`(frame_no, processed_count)` 按 `processed_count/total_tasks` 算进度并封顶 99（1031-1037）。
-  2. 第 1038-1044 行 `options`：`REC_CHAR_TYPE=语言`、`DROP_SCORE=dropScore/100`、`SUB_AREA_DEVIATION_RATE=subtitleAreaDeviationRate/100`、`DEBUG_OCR_LOSS`、`HARDWARD_ACCELERATOR`。
-  3. 第 1045 行 `subtitle_ocr.async_start(video_path, raw_subtitle_path, sub_area, options)` 返回 `(process, task_queue, progress_queue)`。
-  4. 第 1046 行注册进程；第 1047 行 `self.manage_process(process.pid)`（当前为空实现，见 `manage_process`）。
-  5. 第 1048-1049 行把两个队列挂到实例属性。
-  6. 第 1051 行启动 `get_ocr_progress` 守护线程；第 1052 行返回进程。
-- **输出/副作用**：创建并启动一个 `multiprocessing.Process`；启动守护线程；改写两个队列属性。
-- **调用者/被调用者**：被 `run()` 第 138 行调用；内部调用 `subtitle_ocr.async_start`、`ProcessManager.add_process`、`self.manage_process`、`Thread`。
-- **风险点**：`get_ocr_progress` 线程 daemon 化，主进程退出时不保证消费完队列；OCR 进度封顶 99 直到收到终止信号才置 100，若子进程异常退出可能永远停在 99；`self.manage_process` 为空实现，PID 未上报到任何外部回调。
-
-#### `srt2txt(self, srt_file)` — 第 1054-1060 行
-- **职责**：把最终 SRT 转成同名 TXT（仅写入每行字幕文本）。
-- **参数/输入**：`srt_file`（SRT 路径）。
-- **关键步骤**：第 1055 行 `pysrt.open(srt_file, encoding='utf-8')`；第 1056 行生成同目录同 stem 的 `.txt` 路径；第 1057 行输出路径；第 1058-1060 行逐条写 `sub.text`。
-- **输出/副作用**：写出 TXT 文件。
-- **调用者/被调用者**：被 `run()` 第 201 行调用（受 `generateTxt` 配置控制，位于 finally 之后）。
-- **风险点**：此处显式传 `encoding='utf-8'`（1055），与 `generate_subtitle_file_vsf` 第 657 行 `pysrt.open(self.vsf_subtitle)` 未传编码不一致，需确认两处编码策略统一。
-
-#### `append_output(self, *args)` — 第 1062-1067 行
-- **职责**：统一输出口——`print(*args)` 输出到控制台。
-- **参数/输入**：`*args`（任意多个值，空格连接）。
-- **关键步骤**：第 1067 行 `print(*args)`。
-- **输出/副作用**：标准输出。
-- **调用者/被调用者**：被全文各处调用（run、抽帧、过滤、生成等）。
-- **风险点**：直接 `print`，GUI/API 场景无捕获机制（VSF 输出监听虽调用 `append_output`，但无法路由到 UI 控件）。
-
-#### `_safe_input(prompt)` [staticmethod] — 第 1069-1080 行
-- **职责**：交互式提问的健壮封装——捕获 `EOFError`/`OSError`，在无可用 stdin（如 GUI 独立子进程）时返回空串，使程序退化为"不执行需要人工确认的过滤步骤"，而 CLI 场景交互行为保持不变。
-- **参数/输入**：`prompt`（提示文本）。
-- **关键步骤**：
-  1. 第 1071-1076 行文档说明设计意图（无 stdin 时 `input()` 会抛 `EOFError`，导致整个提取任务失败）。
-  2. 第 1077-1078 行 `try: return input(prompt).strip()`。
-  3. 第 1079-1080 行 `except (EOFError, OSError): return ''`。
-- **输出/副作用**：纯函数，返回用户输入的去空白字符串，或异常时返回空串。
-- **调用者/被调用者**：三处交互过滤已改用本方法——`run()` 第 164 行（水印询问）、`filter_watermark()` 第 566 行、`filter_scene_text()` 第 613 行。入口第 1119、1122 行仍使用原生 `input()`（入口在 GUI 子进程中通常不会执行，CLI 下才有 stdin）。
-- **风险点**：有 stdin 时仍会阻塞等待用户；无 stdin 返回空串使水印/场景过滤被静默跳过，上层需知晓此退化行为；`strip()` 使下游 `== '\n'` 的判断（568、614）恒假；未捕获 `KeyboardInterrupt`，CLI 下用户中断仍会抛出。
-
-#### `add_progress_listener(self, listener)` — 第 1082-1090 行
-- **职责**：注册进度监听器（去重）。
-- **参数/输入**：`listener`（回调，文档称接收 `(progress_ocr, progress_frame_extract, progress_total, isFinished)`，见第 1087 行）。
-- **关键步骤**：第 1089-1090 行不在列表时才 append。
-- **输出/副作用**：修改 `progress_listeners`。
-- **调用者/被调用者**：外部 UI 层调用（典型）。
-- **风险点**：第 1087 行文档只列 4 个参数，但 `notify_progress_listeners`（1108）实际传 5 个（含 `progress_post`），文档与实现不一致。
-
-#### `remove_progress_listener(self, listener)` — 第 1092-1100 行
-- **职责**：移除已注册的进度监听器。
-- **参数/输入**：`listener`。
-- **关键步骤**：第 1099-1100 行存在则 remove。
-- **输出/副作用**：修改 `progress_listeners`。
-- **调用者/被调用者**：外部 UI 层调用。
-- **风险点**：无。
-
-#### `notify_progress_listeners(self)` — 第 1102-1110 行
-- **职责**：把当前进度广播给所有监听器，单个监听器异常不影响其他监听器。
-- **参数/输入**：无。
-- **关键步骤**：第 1106-1110 行遍历，`listener(self.progress_ocr, self.progress_frame_extract, self.progress_total, self.isFinished, self.progress_post)`（1108）；异常则 `traceback.print_exc()`（1110）。
-- **输出/副作用**：触发外部回调；异常时打印 traceback。
-- **调用者/被调用者**：被 `update_progress()` 第 1002 行调用。
-- **风险点**：第 1108 行传 5 参，与 `add_progress_listener` 文档（4 参）矛盾；监听器若执行耗时操作会拖慢进度更新（同步调用）。
-
-#### `manage_process(self, pid)` — 第 1112-1114 行
-- **职责**：上报外部进程 PID 的挂钩点——GUI 侧可将其替换为回调以接收 PID，CLI 下保留空实现。
-- **参数/输入**：`self`、`pid`（签名为实例方法，第 1112 行 `def manage_process(self, pid):`）。
-- **关键步骤**：第 1113 行文档说明用途；第 1114 行 `pass`（空实现）。
-- **输出/副作用**：无（CLI 下）。
-- **调用者/被调用者**：被第 499、517、1047 行以 `self.manage_process(p.pid/process.pid)` 调用；真正的进程注册/清理由 `ProcessManager` 承担（第 498、516、1046 行）。
-- **风险点**：方法体为空，若上层期望通过此回调获得 PID 做进程管理，当前不会生效，须依赖 GUI 侧替换该方法或依赖 `ProcessManager`；签名为 `(self, pid)`，调用处按实例方法传入，类型一致。
-
-- **run() 主流程**（从加锁到输出，按执行顺序标注进度值）：
-
-  1. **加锁与进入 try**（110-111）：`lock.acquire()`（110），`try:`（111）。
-  2. **重置进度**（113）：`ocr=0, frame_extract=0, post=0`。
-  3. **元信息输出**（116-126）：语言/模式（116）、GPU（118-119）、帧数/帧率（122-123）、DET/REC 模型名（125）。
-  4. **目录准备**（130-135）：`__delete_frame_cache()`（130）清缓存，创建 `frames`/`subtitle` 目录（132-135）。
-  5. **选区预览**（136）：`capture_frame_with_subtitle_area()` 写 `sub_area.jpg`。
-  6. **启动 OCR 子进程**（138）：`start_subtitle_ocr_async()` —— 内部第 1047 行调用当前为空实现的 `manage_process`。
-  7. **抽帧阶段**（139-150，`frame_extract: 0→100`）：
-     - 有选区 + 主流平台 + `mode == 'accurate'` → `extract_frame_by_det()`（144），进度来自 `current_frame_no/frame_count`（375/385）。
-     - 有选区 + 主流平台 + 其它模式（fast/auto） → `extract_frame_by_vsf()`（146），进度来自 `total_ms/duration_ms`（432/457）。
-     - 非主流平台（148）或无选区（150） → `extract_frame_by_fps()`，进度来自 `current_frame_no/frame_count`（260）。
-  8. **结束标志与等待**（154-156）：投 `(frame_count, -1, None, None, None, None)`（154）；`join()`（156）期间 OCR 进度由守护线程从 `progress_queue` 更新（`ocr: 0→99→100`）。
-  9. **水印过滤交互**（161-169，可选）：`sub_area is None` 时用 `_safe_input()`（164）询问，输入 `y` → `filter_watermark()`（166）。
-  10. **场景文字过滤**（171-174，可选）：`sub_area is None` → `filter_scene_text()`（173，内部 613 用 `_safe_input`）。
-  11. **后处理进度起点**（176）：`update_progress(post=20)`。
-  12. **生成字幕**（181-186）：`use_vsf` 决定 `generate_subtitle_file_vsf()`（183）或 `generate_subtitle_file()`（186）；后者内部 `_remove_duplicate_subtitle()` 把 `post: 20→85`（789）。
-  13. **后处理进度终点**（188）：`update_progress(post=90)`。
-  14. **分词**（190-191）：`wordSegmentation` → `reformat.execute(...)`。
-  15. **收尾**（192-197）：打印耗时（192）；`update_progress(ocr=100, frame_extract=100, post=100)`（194）；`isFinished=True`（195）；`empty_cache()`（197）。
-  16. **释放锁**（198-199）：`finally:` 中 `lock.release()`，保证 try 块正常或异常都解锁。
-  17. **可选导出**（200-201，锁外）：`generateTxt` → `srt2txt()`。
-  - 三段进度与 `progress_total=300` 对应：抽帧 100 / OCR 100 / 后处理 100；监听器收到的回调参数顺序为 `(progress_ocr, progress_frame_extract, progress_total=300, isFinished, progress_post)`（1108）。
-
-- **任务队列协议**（主进程 → OCR 子进程，经 `subtitle_ocr_task_queue`，即 `multiprocessing.Queue`）：
-  - **6 元组结构**：`(total_frame_count, current_frame_no, dt_box, rec_res, total_ms, subtitle_area)`。消费者在 `backend/tools/subtitle_ocr.py` 按此结构解包。各字段含义与来源：
-    1. `total_frame_count`（总帧数）：来源 `self.frame_count`；消费者用于 tqdm 总量。
-    2. `current_frame_no`（当前帧号）：来源各抽帧路径的帧号；`== -1` 为**结束标志**（主进程第 154 行投 `(frame_count, -1, None, None, None, None)`），消费者据此退出。
-    3. `dt_box`（预计算检测框）：仅 `extract_frame_by_det` 在缓存命中时尝试传入（366-370、379-383），但由于以 `current_frame_no` 查缓存而入队项是头/尾帧帧号，实际多为 `None`；其余路径恒为 `None`。
-    4. `rec_res`（预计算识别结果）：与 `dt_box` 配套，同上。
-    5. `total_ms`（毫秒时间戳）：仅 `extract_frame_by_vsf` 传入非 None（425、450），消费者据此用 `CAP_PROP_POS_MSEC` 定位；fps/det 路径为 None 时用 `CAP_PROP_POS_FRAMES = current_frame_no - 1` 定位。
-    6. `subtitle_area`（默认字幕区域）：来源 `config.subtitleArea.value`（枚举），消费者据此 `frame_preprocess` 裁剪上半/下半屏。
-  - **子进程内部队列**：消费者把 6 元组转成 `ocr_queue` 的 4 元组 `(current_frame_no, frame, dt_box, rec_res)`，由 OCR 消费线程识别并写 `raw.txt`。
-  - **进度回传协议**（子进程 → 主进程，经 `progress_queue`）：`(-2, total_tasks)` 告知总帧数（1020-1022）；`(frame_no, processed_count)` 每帧进度（1031-1037）；`(-1, total_tasks)`（1027-1029）或裸 `-1`（1024-1026）表示终止。主进程 `get_ocr_progress()`（1005-1037）按此换算 `ocr` 进度。
-  - **三条路径的 6 元组取值对照**：fps = `(frame_count, n, None, None, None, area)`（257）；det = `(frame_count, n, dt_box, rec_res, None, area)`（372/384，dt_box/rec_res 常为 None）；vsf = `(frame_count, frame_no, None, None, total_ms, area)`（425/450）。
-
-- **三种抽帧路径的对比表**：
-
-| 维度 | `extract_frame_by_fps` | `extract_frame_by_det` | `extract_frame_by_vsf` |
-| --- | --- | --- | --- |
-| 触发条件（run 139-150） | `sub_area is None`，或平台非 Windows/Linux/Darwin | `sub_area` 非空 + 主流平台 + `config.mode.value == 'accurate'`（不判断硬件加速） | `sub_area` 非空 + 主流平台 + 模式非 accurate（fast/auto） |
-| 进入行号 | 148 / 150 | 144 | 146 |
-| 核心函数 | 按 `fps/extractFrequency` 跳帧采样（243） | `SubtitleDetect` + OCR 文本比对找字幕头尾（294-346） | 外部 `VideoSubFinder*.exe` 检测（496-518） |
-| 是否调用外部 exe | 否 | 否 | 是（Windows WXW / macOS Cli / Linux run） |
-| 输出任务 6 元组 | `(frame_count, n, None, None, None, area)`（257） | `(frame_count, n, dt_box, rec_res, None, area)`（372/384，预计算值常为 None） | `(frame_count, frame_no, None, None, total_ms, area)`（425/450） |
-| 定位方式（消费端） | `CAP_PROP_POS_FRAMES = n-1` | `CAP_PROP_POS_FRAMES = n-1` | `CAP_PROP_POS_MSEC = total_ms` |
-| 进度来源 | `current_frame_no/frame_count`（260） | `current_frame_no/frame_count`（375/385） | `total_ms/duration_ms`（432/457） |
-| 额外产物 | 无 | 无 | `raw_vsf.srt`（`vsf_subtitle`）+ 后续走 `generate_subtitle_file_vsf` |
-| 字幕完整度/速度 | 易漏字、最快 | 较精准、较慢（逐帧 OCR，README 标注 accurate「非常慢」） | 依赖 VSF、质量较好但需外部程序 |
-| `use_vsf` | 保持 False | 保持 False | 置 True（393） |
-
-- **跨进程/跨模块调用清单**：
-  - **tools 模块**：
-    - `backend.tools.hardware_accelerator.HardwareAccelerator`：`instance`（51）、`set_enabled`（53）、`has_accelerator`（118、506）、`has_cuda`（479）、`onnx_providers`（479）、`accelerator_name`（119）、作为 options 传入子进程（1043）。
-    - `backend.tools.paddle_model_config.PaddleModelConfig`：构造（54），读 `DET_MODEL_PATH / REC_MODEL_PATH`（125）。
-    - `backend.tools.subtitle_detect.SubtitleDetect.detect_subtitle`（294）。
-    - `backend.tools.ocr.OcrRecogniser`：构造（284、928），`predict`（318、932、939）；`get_coordinates`（298、910）。
-    - `backend.tools.subtitle_ocr.async_start`（1045）—— 内部派生 `ocr_task_producer`（生产者线程）、`ocr_task_consumer`（消费者线程）、`frame_preprocess`（裁剪）。
-    - `backend.tools.process_manager.ProcessManager.instance().add_process`（498、516、1046）—— 进程注册与退出清理。
-    - `backend.tools.reformat.execute`（191）—— 分词后处理。
-    - `backend.bean.subtitle_area.SubtitleArea`（入口 1124）。
-  - **外部 exe / 系统命令**：
-    - `subfinder/windows/VideoSubFinderWXW.exe`（464，Windows）。
-    - `subfinder/macos/VideoSubFinderCli`（466，macOS，`chmod 775`）。
-    - `subfinder/linux/VideoSubFinderCli.run`（469，Linux，`chmod 775`）。
-    - 间接：`ProcessManager` 通过 `taskkill /F /T /PID`（Windows）与 `pkill -9 -P` / `kill -9`（POSIX）终止进程（见 process_manager.py）。
-  - **配置（来自 `backend/config.py`，经 `from backend.config import *`）**：
-    - `config.language` / `config.mode`（116；`mode.value == 'accurate'` 判定在 143）。
-    - `config.hardwareAcceleration`（53）。
-    - `config.extractFrequency`（243）。
-    - `config.subtitleArea`（257、372、384、425、450）。
-    - `config.subtitleAreaDeviationPixel`（605-606）。
-    - `config.subtitleAreaDeviationRate`（1041）。
-    - `config.dropScore`（1040）。
-    - `config.thresholdTextSimilarity`（792、948）。
-    - `config.wordSegmentation`（190）。
-    - `config.generateTxt`（200）。
-    - `config.waterarkAreaNum`（720）。
-    - `config.tolerantPixelX` / `config.tolerantPixelY`（870、959-962，均以 `.value` 参与比较）。
-    - `config.videoSubFinderCpuCores`（484-485）/ `config.videoSubFinderDecoder`（489-490、508-509）。
-    - `config.debugOcrLoss`（1042）。
-    - `config.debugNoDeleteCache`（984）。
-    - `config.deleteEmptyTimeStamp`（676）。
-    - `BASE_DIR`（63、464-469）、`tr`（多处翻译字典，`config.py` 从 `interface/*.ini` 加载）。
-  - **第三方库入口**：`cv2`（贯穿）、`pysrt`（657、683、1055）、`Levenshtein.ratio`（792、948）、`numpy`（894-902，无调用路径）、`PIL`（970，无调用路径）、`tqdm`（277）。
-
-- **维护与重构建议**（面向日后局部维护与全面重构，具体到行号）：
-  1. **`run()` 的 finally 边界（第 110-199 行）**：`try` 仅覆盖 111-197，`finally` 只保证 `lock.release()`（199）。`isFinished=True`（195）与 `empty_cache()`（197）在 try 内，异常时跳过；`srt2txt()`（200-201）在锁外。建议收窄 try 内逻辑，把"完成标志/清理/导出"统一放进 finally 或单独的收尾方法，明确异常时的期望状态，避免 UI 永久停在未完成态。
-  2. **交互抽象（第 164、566、613、1119、1122 行）**：`_safe_input`（1069-1080）已解决无 stdin 崩溃，但有 stdin 时仍阻塞，且无 stdin 时静默跳过过滤（返回空串）。建议把交互进一步抽象为可注入的 `InteractivePrompt`：GUI/API 提供非阻塞实现，CLI 提供 stdin 实现，核心引擎只依赖接口。
-  3. **`manage_process` 空实现（第 1112-1114 行，调用点 499/517/1047）**：当前 `pass`，PID 不上报。建议要么在 GUI 侧稳定替换该方法为回调并补充契约文档，要么删除该挂钩、统一由 `ProcessManager` 负责（避免两套进程管理机制并存造成理解成本）。
-  4. **`accurate` 模式路径变重（第 143-144 行）**：`accurate` 现无条件走 `extract_frame_by_det()`（不再判断硬件加速），该路径逐帧 OCR、耗时显著。建议监控其性能与稳定性，尤其关注 det 路径缓存 key 混用（321 vs 366/379）与 `img1=None`（340）两处；必要时给 det 路径补充缓存一致性单测与超时/降级的兜底策略。
-  5. **det 缓存 key 不一致（第 321 vs 366/379 行）**：写缓存与入队读取都用 `current_frame_no`，而入队项的帧号是头/尾帧号，导致 `dt_box/rec_res` 多为 None、预计算 OCR 失效。建议统一以"入队帧号"为唯一 key，并让 `_compare_ocr_result` 的 `img1_no` 取同一 key，消除第 340 行对 `img1=None` 的隐式依赖。
-  6. **模型目录缺失校验（第 125 行 + `paddle_model_config.py`）**：V5 模型未下载时 `DET_MODEL_PATH/REC_MODEL_PATH` 为 None，`os.path.basename(None)` 会抛 `TypeError`。建议在构造或 `run()` 开头显式校验模型路径存在并给出可读错误/下载引导。
-  7. **VSF 命令拼接与 shell（第 488-490、505-509、513 行）**：f-string 拼接路径遇空格/特殊字符会解析错误，POSIX 分支 `shell=True` 扩大注入面。建议改用参数列表 `Popen([...], shell=False)`，并对可执行路径做存在性校验。
-  8. **时间戳换算单位（第 424、449、756、759 行）**：`int(total_ms / self.fps)` 等量纲不当（毫秒÷帧率≠帧号）。虽消费端多用 `total_ms`/帧号定位故影响有限，但语义与注释不符。建议统一定义"帧号↔毫秒"转换并明确单位，避免后续维护踩坑。
-  9. **短字幕后处理未接入（第 636、644、652 行）**：`post_process_subtitle` 计算并返回后无人接收，"拉长到 1 秒"未作用于最终结果。建议要么删除，要么在 `run()` 中接收并二次处理。
-  10. **监听器签名不一致（第 1087 vs 1108 行）**：文档写 4 参，实际传 5 参（含 `progress_post`）。建议统一文档与实现，并考虑传命名字典以提升兼容性。
-  11. **无调用代码（第 758-759、882-903、964-974 行）**：`_frameno_to_milliseconds`、`_compute_image_similarity`、`__get_thum` 当前全类无调用。建议确认无历史用途后删除，减小维护面；若保留，注意 `__get_thum` 依赖 Pillow ≥ 9.1（`Image.Resampling.LANCZOS`），需在依赖清单中固定版本。
-  12. **资源释放（第 264、387 行）**：`video_cap.release()` 在正常路径末尾，抽帧中途异常则不执行；VSF 路径把 `video_cap` 置 None（396）。建议用上下文管理或 finally 保证释放。
-  13. **随机预览帧不可复现（第 532、593 行）**：`random.randint` 导致每次预览帧不同，问题难复现。建议固定种子或取固定帧（如 1/2 处）。
-  14. **`== '\n'` 判断恒假（第 568、614 行）**：`_safe_input` 内 `strip()`（1078）后不可能等于 `'\n'`，"回车默认确认"失效。建议改为空字符串判断 `== ''`，并在确认逻辑里涵盖空串语义。
-  15. **架构层面**：单类承担编排、抽帧、OCR 进程管理、文件过滤、字幕生成、进度通知等全部职责（1000+ 行），且混用 RLock/多线程/多进程/全局单例/输入交互。重构方向：拆分为 `FrameSampler`（三种策略，策略模式）、`SubtitlePostProcessor`、`SrtGenerator`、`ProgressDispatcher`；把 `input()` 交互抽象为可注入的 `InteractivePrompt`；把配置访问统一封装（统一 `.value` 读取）；用 `dataclass`/类型标注强化队列协议，减少 6 元组的隐式约定。
-
-## 三、后端工具模块 backend/tools/
-
-本节覆盖 `backend/tools/` 下的 14 个模块，它们是 `main.py` 与 UI 层依赖的底层设施层：硬件加速探测（`hardware_accelerator`）、PaddleOCR V5 模型路径与语言映射（`paddle_model_config`）、DirectML/ONNX 字幕 OCR 后端（`dml_ocr`，本轮新增的核心模块）、OCR 识别封装与后端路由（`ocr`）、字幕框检测（`subtitle_detect`）、字幕 OCR 多进程/多线程流水线（`subtitle_ocr`）、进程生命周期管理（`process_manager`）、异步子脚本运行器（`python_runner`）、跨进程回调桥（`subtitle_extractor_remote_call`）、字幕文本重格式化（`reformat`）、系统主题监听（`theme_listener`）、版本检查（`version_service`）、离线打包脚本（`makedist`），以及空的包标记 `__init__.py`。`main.py:27-33` 集中导入了其中 7 个模块并在 `main.py:51-56`、`main.py:1042`、`main.py:189` 等处实例化/调用；UI 层（`gui.py`、`ui/home_interface.py`、`ui/advanced_setting_interface.py`、`ui/timeline_sync_interface.py`）依赖主题监听、版本服务、回调桥、进程管理器与异步运行器。`makedist.py` 与 `__init__.py` 不参与运行时流程。`dml_ocr.py` 由 `ocr.py:100` 按需导入，是 PaddlePaddle 之外真正启用 Windows DirectML 加速的推理实现。本节所有行号均以当前磁盘源码为准。
+- **调用关系**：`subtitle_ocr.py:8-9` 导入 `SubtitleArea` 与整个 `constant`（`BGR_COLOR_*` 用于 `dump_debug_info`）。其他抽帧/UI 模块按枚举值引用。
+- **实现细节**：三组枚举均继承 `enum.Enum`；前两组用整数值，解码器组用字符串值。颜色常量为 OpenCV 的 BGR 顺序（非 RGB），直接传给 `cv2.rectangle` / `ImageDraw`。
+- **维护注意点**：枚举整数值可能被写入配置或队列消息，调整成员值会破坏已有数据兼容性；新增区域类型需同步检查 `subtitle_ocr.py:frame_preprocess`（仅处理上下半部分）等分支。`CUSTOM` 仍为注释状态，表明自定义矩形区域暂未启用。
 
 ---
 
-### tools/__init__.py
-- **路径**：`backend/tools/__init__.py`
-- **规模**：0 行（空文件）
-- **职责**：包标记文件，使 `backend.tools` 成为可导入的 Python 包，从而支持 `from backend.tools.xxx import ...` 与 `from backend.tools import subtitle_ocr` 等导入形式。
-- **关键类/函数**：
-| 名称 | 行号 | 说明 |
-|---|---|---|
-| （无内容） | — | 无类、无函数、无导出，`__all__` 未定义 |
-- **调用关系**：被所有 `backend.tools.*` 导入语句间接使用；无显式调用方。
-- **实现细节**：文件为空，不含任何可执行代码，仅起命名空间包作用。
-- **维护与重构注意点**：若未来需要在包级统一导出（如 `from backend.tools import OcrRecogniser`），需在此补 `__all__`；当前各模块均使用全路径导入，改动风险低。
+### backend/tools/env_check.py
 
----
-
-### tools/dml_ocr.py
-- **路径**：`backend/tools/dml_ocr.py`
-- **规模**：354 行（本轮新增，最重要的模块）
-- **职责**：DirectML / ONNX Runtime 字幕 OCR 后端。绕开 PaddleOCR/PaddlePaddle 仅支持 `gpu:0`/`cpu` 的限制，直接加载官方发布的 PP-OCRv5 ONNX 模型，用 onnxruntime 的 `DmlExecutionProvider` 完成文本检测与识别，并对外提供与 `OcrRecogniser` **完全一致**的 `predict(bgr_image) -> (dt_box, rec_res)` 接口。前后处理（DBNet 检测后处理、CTC 解码）全部内联实现，不依赖 paddlex 私有 API，降低 PaddleX 升级破坏风险。已验证可正确识别中英文。
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/env_check.py`
+- **规模**：81 行
+- **职责**：GUI 启动时的环境与模型检测。集中处理 DML 设备枚举、ONNX 模型齐全性检查、缺失模型提示文案与后台下载，避免检测逻辑散落在 UI 代码中。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| 模块常量 `_MODEL_BASE` / `_DET_MODEL_DIR` / `_REC_MODEL_DIR` | 34-39 | 官方 ONNX 下载基址 `https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0`；模型目录 `PP-OCRv5_mobile_det_onnx`、`PP-OCRv5_mobile_rec_onnx` |
-| 检测/识别参数常量 | 41-49 | `_DET_THRESH=0.3`、`_DET_BOX_THRESH=0.6`、`_DET_UNCLIP_RATIO=1.5`、`_DET_MAX_CANDIDATES=1000`、`_DET_LIMIT_SIDE_LEN=960`、`_REC_IMAGE_SHAPE=(3,48,320)` |
-| `_default_cache_dir()` | 52-57 | 返回 ONNX 模型缓存根目录：优先读环境变量 `VSE_ONNX_MODEL_DIR`（`expanduser`），否则 `Path.home()/'.paddleocr'/'onnx'` |
-| `_download_model(model_dir_name, cache_dir)` | 60-85 | 按需下载并解压单个官方 ONNX 模型，返回 `inference.onnx` 路径 |
-| `_read_char_dict(model_dir_name, cache_dir)` | 88-125 | 从随模型分发的 `inference.yml` 读取 CTC 字符字典，补 blank 与空格 |
-| `_DBPostProcess` | 128-210 | 内联 DBNet 检测后处理类（移植自 PaddleX，避免私有 API 依赖） |
-| `_DBPostProcess.__init__` | 131-137 | 配置 `thresh/box_thresh/unclip_ratio/max_candidates`，`min_size=3` |
-| `_DBPostProcess.__call__(pred, src_h, src_w, ratio_h, ratio_w)` | 139-168 | 概率图阈值分割→`cv2.findContours`→最小框→框得分过滤→unclip 外扩→坐标缩放裁剪，返回 `(boxes, scores)` |
-| `_DBPostProcess._mini_boxes` | 170-184 | `cv2.minAreaRect` 求最小外接矩形并按 y 排序得到稳定四点顺序 |
-| `_DBPostProcess._box_score_fast` | 186-198 | 用多边形 mask 计算框内概率均值作为置信度 |
-| `_DBPostProcess._unclip` | 200-210 | 用 `pyclipper.PyclipperOffset` 按 `area*ratio/length` 外扩框 |
-| `_CTCDecode` | 213-231 | 内联 CTC 贪心解码类 |
-| `_CTCDecode.__init__(char_list)` | 216-218 | 保存字符表（首位必须是 blank，索引 0） |
-| `_CTCDecode.__call__(probs)` | 220-231 | 对 `(T,C)` 概率矩阵逐帧 argmax，合并连续重复、剔除 blank，返回 `(拼接文本, 平均置信度)` |
-| `DmlOcrRecogniser` | 234-354 | ONNX Runtime DirectML 识别器主类，接口与 `OcrRecogniser` 对齐 |
-| `DmlOcrRecogniser.__init__(providers=None, model_dir=None)` | 244-270 | 选择 provider、下载模型、建 det/rec 两个 `InferenceSession`、装配后处理器 |
-| `DmlOcrRecogniser._det_predict(image)` | 272-298 | 文本检测：长边缩放→归一化→推理→DBNet 后处理，返回 `(boxes, scores)` |
-| `DmlOcrRecogniser._rec_predict(image, box)` | 300-316 | 单个文本框识别：抠图→resize/pad→归一化→推理→CTC 解码 |
-| `DmlOcrRecogniser._CropRotate(img, box)` | 318-336 | `@staticmethod`，四点框透视变换拉平为水平矩形文字行 |
-| `DmlOcrRecogniser.predict(image)` | 338-354 | 兼容入口：检测各框后逐框识别，返回 `(dt_box, rec_res)` |
+|------|------|------|
+| `detect_environment` | 16-37 | 返回环境检测字典：`dml_devices`、`model_tier`、`missing`、`model_dir`、`ready` |
+| `_t` | 40-45 | 读取 `tr['Setting'][key]`，`KeyError`/`TypeError` 时回退默认文案 |
+| `describe_missing` | 48-55 | 将检测结果格式化为用户可读提示：缺失模型用途 + 下载 URL + 解压目录 |
+| `download_missing_models` | 58-81 | 后台线程下载全部缺失模型，支持进度/完成回调 |
+
 - **调用关系**：
-  - 由 `ocr.py:100` 在 `init_model()` 中按需 `from backend.tools.dml_ocr import DmlOcrRecogniser` 并构造（`ocr.py:101`），成功则 `ocr.py:102` 置 `use_dml=True`，`predict()` 由 `ocr.py:31-32` 直接委托本类的 `predict(image)`。
-  - 内部依赖 `onnxruntime`（运行时导入，245）、`cv2`/`numpy`、`tarfile`/`urllib.request`（模型下载）、`pyclipper`（可选，29-31）、`yaml`（PyYAML，字符字典解析）。
-  - 模型来源为百度官方 PP-OCRv5 ONNX 资源（34-39），下载到用户缓存目录，不随仓库分发。
+  - 模块级导入：`tr`（`backend.config`，9）；`onnx_ocr` 的 `MODEL_INFO`、`check_models`、`list_dml_devices`、`model_download_url`、`_download_model`、`_default_cache_dir`（10-13）。
+  - 函数内导入：`config`（`detect_environment`，27）、`Path`（`download_missing_models.worker`，66）。
+  - 由设置页 / GUI 启动流程调用，UI 层消费返回值与回调。
+
 - **实现细节**：
-  - **缓存目录与下载**（52-85）：`_default_cache_dir()` 支持 `VSE_ONNX_MODEL_DIR` 覆盖，默认 `~/.paddleocr/onnx`（52-57）。`_download_model()`（60-85）先用 `inference.onnx` 是否已存在做短路（63-65），否则 `urlretrieve` 下载 `<model>.tar`（69-72），解包时逐个校验成员路径必须落在 `target_dir` 内且为普通文件（76-81，防 tar 路径穿越），最后确认 `inference.onnx` 存在（83-84）。
-  - **字符字典**（88-125）：优先用 PyYAML `yaml.safe_load` 读取 `config['PostProcess']['character_dict']`（95-99）。注释明确指出数字/标点在 yml 中带引号（如 `- '0'`），手工切分会把引号读入字典导致数字被误识别为 `"'2''0'"` 一类错误；无 PyYAML 时回退逐行解析并手动剥除成对引号（101-117）。最终 `char_list = ['blank'] + chars`，若字典无空格再追加 `' '`（122-124），使字典首位为 blank（索引 0）、末位为 space，长度与 PP-OCRv5 rec 模型输出类别数对齐（18385 类），与 `CTCLabelDecode(add_special_char=True, use_space_char=True)` 行为一致（120-121）。
-  - **provider 选择**（244-256）：`providers is None` 时按 `('DmlExecutionProvider','CPUExecutionProvider')` 顺序取当前 `ort.get_available_providers()` 中可用者（249-253），保证 **DmlExecutionProvider 优先**；若列表不含 DML 则直接抛 `RuntimeError`（255-256），由上层 `OcrRecogniser.init_model()` 捕获并回退 PaddlePaddle/CPU。实例记录 `active_provider = det_session.get_providers()[0]`（270）供诊断。
-  - **检测流程**（272-298）：`DetResizeForTest(resize_long=960)`——长边缩放到 960 并把高宽各自向上取 128 的倍数（276-280）；`NormalizeImage` 用均值 `[0.485,0.456,0.406]`、标准差 `[0.229,0.224,0.225]`（289-293）；以 `{'x': ...}` 喂入 det_session（295）；后处理得到 AABB boxes 与 scores（297-298）。
-  - **识别流程**（300-316）：`_CropRotate` 拉平文字行（302）；按 `_REC_IMAGE_SHAPE=(3,48,320)` 计算缩放宽，上限 3200（303-310）；`(x-0.5)/0.5` 归一化、CHW 变换、pad 到 `target_w`（311-314）；以 `{'x': ...}` 喂入 rec_session 并 CTC 解码（315-316）。
-  - **predict 组装**（338-354）：无检测框直接返回 `([],[])`（344-346）；逐框识别，空文本跳过（348-351）；`dt_box` 元素为 `[(x1,y1),(x2,y2),(x3,y3),(x4,y4)]` 四点整数坐标，`rec_res` 元素为 `(text, score)`（352-354）——与 `OcrRecogniser.predict()` 的输出结构完全一致，故上层无需区分后端即可消费。
-- **维护与重构注意点**：
-  - **强版本耦合**：det/rec ONNX 输入名写死为 `'x'`（295,315），输出形状假设 `outputs[0][0,0]`（296）与 `outputs[0][0]`（316），归一化参数与阈值常量（41-49,291-292,312）均与 PP-OCRv5 官方配置绑定；模型或 onnxruntime 升级需同步复核。
-  - **DML 不可用即失败**：构造时只要无 DmlExecutionProvider 就抛异常（255-256），设计上依赖上层回退 CPU；若希望本机无 DML 时仍能走 ONNX CPU，需要放宽该判断并显式记录 active_provider。
-  - **依赖下载与网络**：首次运行需联网从 `paddle-model-ecology.bj.bcebos.com` 下载两个 tar（34-39,69-72），无离线兜底与校验（无 hash 校验）；缓存目录权限、代理环境、tar 结构变化都会影响启动。
-  - **字符字典解析**：PyYAML 是首选路径（96-99），回退解析（101-117）依赖 `character_dict:` 缩进与 `  - ` 前缀的精确格式；yml 结构变化需两处同步。字典长度必须与模型输出类别数一致，否则 CTC 索引越界，改动字典逻辑时务必核对 18385 类。
-  - **pyclipper 可选**：未安装时 `_DBPostProcess.__call__` 退化为直接用 contour 点（156-158），框精度下降；`_unclip`（200-210）依赖 pyclipper，虽在 __call__ 中已判空规避，但语义差异需知悉。
-  - **与 OcrRecogniser 接口同步**：`predict()` 输出格式必须与 `ocr.py` 的 `dt_box`/`rec_res` 约定及 `get_coordinates()` 的点顺序保持一致；修改其一需同时验证两条后端路径。
-  - **无超时/取消**：`InferenceSession.run` 与下载均无超时或取消机制；界面层若要支持中断识别需额外设计。
+  - `detect_environment` 读 `config.modelTier.value`（29），调用 `check_models(tier)` 得 `(missing, model_dir)`（30），以 `ready = not missing`（36）标记是否齐全。
+  - `describe_missing` 先处理 `ready`（50-51），否则把每个缺失目录名经 `MODEL_INFO` 映射为用途说明（52），并用缺失列表**首项**的下载 URL 生成提示（53-55）。
+  - `download_missing_models` 在 daemon 线程（`threading.Thread(..., daemon=True)`，81）中逐项调用 `_download_model`（72），异常经 `done_callback(False, msg)` 回传（77-80）。
+
+- **维护注意点**：
+  - `describe_missing` 依赖 `info['missing'][0]`，调用前应确保字典由 `detect_environment` 生成；`ready=True` 时已提前返回，不会索引空列表。
+  - 翻译键 `ModelReady` / `ModelMissing` / `ModelMissingHint` / `ModelDownloading` / `ModelDownloadDone` / `ModelDownloadFail` 若缺失，均回退英文默认文案，新增语言包时需补齐。
+  - `download_missing_models` 直接调用 `onnx_ocr` 的私有函数 `_download_model`，与该模块强耦合；重命名需同步修改本文件导入（12 行）。
+  - `_default_cache_dir` 被导入但本模块未直接调用（13 行），实际缓存目录来自 `check_models` 的返回值；保留该导入属冗余，重构时可清理。
 
 ---
 
-### tools/hardware_accelerator.py
-- **路径**：`backend/tools/hardware_accelerator.py`
-- **规模**：94 行
-- **职责**：探测并封装本机的硬件加速能力（CUDA 与 ONNX Runtime 各类 ExecutionProvider），以单例形式向 OCR/检测模块提供统一的加速能力查询接口，并允许通过开关整体禁用加速。
+### backend/tools/hardware_accelerator.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/hardware_accelerator.py`
+- **规模**：59 行
+- **职责**：执行后端信息单例（仅 CPU / DirectML）。探测并记录可用的 DML 设备，为 GUI 展示与 OCR 后端选择提供依据；不涉及 CUDA / PaddlePaddle GPU。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `HardwareAccelerator` | 4 | 加速能力探测类 |
-| `_instance` | 7 | 类变量，保存单例 |
-| `instance()` | 9-15 | `@classmethod`，惰性创建单例并调用 `initialize()` |
-| `__init__()` | 17-20 | 初始化 `__cuda=False`、`__onnx_providers=[]`、`__enabled=True` |
-| `initialize()` | 22-24 | 依次调用 `check_paddle()`、`check_onnx()` |
-| `check_paddle()` | 26-32 | 用 `paddle.is_compiled_with_cuda()` 与 `paddle.static.cuda_places()` 判断 CUDA 可用性 |
-| `check_onnx()` | 34-60 | 遍历 `ort.get_available_providers()`，过滤 CPU 与不支持项，记录白名单 provider |
-| `has_accelerator()` | 62-65 | 返回是否启用且有 CUDA 或 ONNX provider |
-| `accelerator_name` | 67-76 | `@property`，返回 "GPU"、逗号连接的 provider 名或 "CPU" |
-| `onnx_providers` | 78-82 | `@property`，返回 provider 列表（禁用时返回空） |
-| `has_cuda()` | 84-87 | 方法，返回是否有 CUDA（禁用时 False） |
-| `set_enabled()` | 89-90 | 设置 `__enabled` 总开关 |
+|------|------|------|
+| `HardwareAccelerator` | 10-59 | 执行后端信息单例类 |
+| `instance` | 15-20 | 类方法，懒加载单例并调用 `initialize()` |
+| `__init__` | 22-25 | 初始化 `_dml_devices=[]`、`_dml_available=False`、`_enabled=True` |
+| `initialize` | 27-29 | 调用 `list_dml_devices()`，据结果设置 `_dml_available` |
+| `dml_devices` | 31-34 | 属性，返回设备列表副本 |
+| `has_dml` | 36-37 | `_enabled and _dml_available` |
+| `has_accelerator` | 39-41 | 兼容别名，等价于 `has_dml()` |
+| `has_cuda` | 43-45 | 兼容占位，恒返回 `False` |
+| `accelerator_name` | 47-51 | 无 DML 返回 `'CPU'`，否则拼接所有设备名 |
+| `onnx_providers` | 53-56 | 兼容别名，有 DML 返回 `['DmlExecutionProvider']`，否则 `[]` |
+| `set_enabled` | 58-59 | 设置 `_enabled`，影响 `has_dml()` 判定 |
+
 - **调用关系**：
-  - 被 `main.py:27` 导入，`main.py:51` 调用 `HardwareAccelerator.instance()` 创建单例，`set_enabled(config.hardwareAcceleration.value)`（`main.py:53`），`has_accelerator()`/`accelerator_name`（`main.py:117-118,141,503`），`has_cuda()`/`onnx_providers`（`main.py:476`）。
-  - 被 `subtitle_detect.py:3,18` 以 `instance()` 使用；被 `ocr.py:5,13` 同样以 `HardwareAccelerator.instance()` 使用——与 `main.py` 共享同一单例，加速状态（含 `set_enabled` 开关与探测结果）不再丢失。
-  - 被 `paddle_model_config.py` 经构造参数传入（由 `main.py:54`、`ocr.py:92`、`subtitle_detect.py:19` 传入）；`ocr.py:97-98` 直接读取其 `has_cuda()`/`onnx_providers` 决定是否启用 DML 后端。
-  - 内部依赖 `backend.config.tr`（多语言提示）与 `paddle`、`onnxruntime`。
-- **实现细节**：
-  - `check_paddle()`（26-32）：先判断 `paddle.is_compiled_with_cuda()`（28），再判断 `len(paddle.static.cuda_places()) > 0`（30），两者满足才置 `__cuda=True`（32）。
-  - `check_onnx()`（34-60）：仅在无 CUDA 时执行（35-36）；`CPUExecutionProvider` 被显式跳过（41-44）；白名单包括 `DmlExecutionProvider`（Windows GPU）、`ROCMExecutionProvider`、`MIGraphXExecutionProvider`、`VitisAIExecutionProvider`、`OpenVINOExecutionProvider`、`MetalExecutionProvider`、`CoreMLExecutionProvider`、`CUDAExecutionProvider`（45-54，含中文注释说明各平台/用途）；不在白名单的打印 `OnnxExectionProviderNotSupportedSkipped`（55）；识别到的打印 `OnnxExecutionProviderDetected` 并追加（57-58）；`ModuleNotFoundError` 时打印 `OnnxRuntimeNotInstall`（59-60）。
-  - 所有查询接口（62-87）都先检查 `__enabled`，禁用后统一返回 False/空列表/"CPU"。
-- **维护与重构注意点**：
-  - 单例实现（9-15）无加锁，非线程安全；多进程首次使用时各自初始化。
-  - 白名单为硬编码列表（45-54），新增 provider 需改代码；`check_onnx` 在有 CUDA 时直接 return（35-36），故不会同时记录 ONNX provider，CUDA 优先级高于 ONNX。
-  - `check_onnx()` 中 `VitisAIExecutionProvider` 注释提到"实测和 DirectML 性能似乎差不多"（49），选型时可作为 Ryzen AI 平台的备选 provider。
-  - 文件尾部 92-94 行为多余空白，可清理。
-  - 多处 print 走 `tr` 配置（55,57,60），缺键会 KeyError，属配置耦合。
-  - `set_enabled(False)` 后所有查询返回保守值（62-87），但 `paddle_model_config._resolve_models()` 会用 `has_accelerator()` 判断是否走 mobile 模型，禁用加速会间接影响模型选择（见该模块注意点）。
+  - 导入 `list_dml_devices`（`backend.tools.onnx_ocr`，7）。
+  - `ocr.py:8,17` 通过 `HardwareAccelerator.instance()` 取得单例，在 `_resolve_config` 的 `auto` 分支调用 `has_dml()`（`ocr.py:40`）。
+  - GUI 层读取 `dml_devices` / `accelerator_name` 展示设备，`set_enabled` 响应总开关。
+
+- **实现细节**：`initialize()` 只在 `instance()` 首次创建时执行一次（19 行），后续 DML 设备热插拔不会自动刷新；`accelerator_name` 用设备字典的 `name` 字段拼接；所有对外属性返回副本或新列表，避免外部修改内部状态。
+
+- **维护注意点**：
+  - `has_cuda()` 恒为 `False`，是为旧调用方保留的兼容接口，不要据此实现 CUDA 逻辑。
+  - `has_accelerator()`、`onnx_providers` 同样是兼容别名；`onnx_providers` 仅返回 DML，不含 CPU，与 `OnnxOcrRecogniser` 内部构造的 providers 列表语义不同。
+  - `set_enabled(False)` 只改 `_enabled`，不会触发重新枚举；与 `config.hardwareAcceleration`（在 `ocr.py` 中强制 providers 为 CPU）是两条独立开关，需注意二者一致性。
+  - 切换后端/设备后若需刷新设备列表，须显式重新调用 `initialize()` 或重建单例，否则仍用首次枚举结果。
 
 ---
 
-### tools/makedist.py
-- **路径**：`backend/tools/makedist.py`
-- **规模**：56 行
-- **职责**：离线打包脚本，使用 QPT（qpt 框架）将 GUI 程序打包为 Windows 可执行发布包，并按 `--cuda` 参数选择性注入 GPU 版 PaddlePaddle 与 CUDA 运行库。不参与运行时。
-- **关键类/函数**：
-| 名称 | 行号 | 说明 |
-|---|---|---|
-| `main()` | 10-52 | 计算路径、解析参数、组装 QPT 子模块并执行打包 |
-| `__main__` 入口 | 55-56 | 直接调用 `main()` |
-- **调用关系**：未被任何运行时代码 import（全项目仅自身出现）；属于手工/构建时执行脚本。
-- **实现细节**：
-  - 路径计算（11-14）：`WORK_DIR` 为 `__file__` 连续 3 次 `dirname` 得到项目根；`LAUNCH_PATH=gui.py`；`SAVE_PATH=上级目录/vse_out`；`ICON_PATH=design/vse.ico`。
-  - 参数解析器（17-26）：`--cuda` 使用 `nargs='?'`、`const="11.8"`、`default=None`（18-24）。注意第 21 行注释写"默认值是 10.2"，与 `const="11.8"` 不符。
-  - CUDA 分支（30-37）：
-    - `10.2`：`paddlepaddle-gpu==2.5.2.post102`（指定 paddle 官方 find_links）+ `CopyCUDAPackage(cuda_version)` + `numpy==1.26.4`（30-33）。
-    - `11.8`：`paddlepaddle-gpu==3.0.0`，`opts="--index-url .../cu118/"`（34-35）。
-    - `12.6`：`paddlepaddle-gpu==3.0.0`，`opts="--index-url .../cu126/"`（36-37）。
-  - `QPT_Action=True` 环境变量时调用 `set_default_pip_source(PYPI_PIP_SOURCE)`（39-40）。
-  - `CEM(...)` 组装（42-50）：`hidden_terminal=False`、`requirements_file="./requirements.txt"`、`sub_modules=sub_modules`；最后 `module.make()`（52）。
-- **维护与重构注意点**：
-  - 注释与代码不一致（第 21 行注释"10.2" vs `const="11.8"`），易误导。
-  - 版本耦合严重：10.2 分支用 Paddle 2.5.2，11.8/12.6 分支用 3.0.0；与 `paddle_model_config.py` 强绑定的 PP-OCRv5/3.x API 需保持同步升级。
-  - `opts` 字符串尾部带空格（35,37），find_links URL 硬编码（31,35,37），迁移镜像或版本需改源码。
-  - `SAVE_PATH` 写到项目上级目录（`vse_out`），打包产物不在仓库内，清理时注意。
-  - 依赖 qpt 工具链（`qpt.executor/modules.cuda/smart_opt/kernel.qinterpreter`），环境缺失时脚本无法运行。
+### backend/tools/makedist.py
 
----
-
-### tools/ocr.py
-- **路径**：`backend/tools/ocr.py`
-- **规模**：150 行
-- **职责**：OCR 识别封装与后端路由。统一管理两条推理路径：无 CUDA 且检测到 ONNX provider 时走 `DmlOcrRecogniser`（DirectML/ONNX）；否则走 PaddleOCR 3.x。对 PaddleOCR 结果做格式转换（4 点检测框 `dt_box` 与 `(文本,置信度)` 的 `rec_res`）、按 y 坐标行聚类与阅读顺序排序；`get_coordinates()` 从 4 点框提取 AABB 坐标。
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/makedist.py`
+- **规模**：34 行
+- **职责**：QPT 打包脚本，基于 `requirements.txt` 生成绿色版运行目录。仅 CPU / DirectML 一种变体，无 CUDA 参数与 CUDA 依赖包。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `OcrRecogniser` | 9 | OCR 识别封装类与后端路由 |
-| `__init__()` | 10-15 | `recogniser=None`；`hardware_accelerator = HardwareAccelerator.instance()`（单例，13）；`use_dml=False`（15） |
-| `y_round()` | 15-24 | `@staticmethod`，把 y 取整到最近的 10 的倍数 |
-| `predict(image)` | 26-89 | 惰性初始化；`use_dml` 时委托 ONNX 后端（30-32）；否则 PaddleOCR 识别、格式转换、行聚类、排序 |
-| `init_model()` | 91-128 | 先尝试 DML 后端（97-106），再按硬件构造 `PaddleOCR`（108-128） |
-| `get_coordinates(dt_box)` | 131-150 | 从 4 点检测框提取 `(xmin,xmax,ymin,ymax)` |
+|------|------|------|
+| `main` | 12-30 | 计算路径、按环境变量切换 pip 源、构造 `CEM` 并执行 `make()` |
+| `__main__` 入口块 | 33-34 | 直接调用 `main()` |
+
 - **调用关系**：
-  - 被 `main.py:29` 导入，`main.py:282,925` 创建 `OcrRecogniser()`。
-  - 被 `subtitle_ocr.py:7` 导入，`subtitle_ocr.py:136-137` 在消费者线程中创建并注入 `options.HARDWARD_ACCELERATOR`，`subtitle_ocr.py:29` 调用 `predict()`。
-  - `init_model()` 中按需导入并构造 `DmlOcrRecogniser`（`ocr.py:100-101`）；构造 `PaddleModelConfig`（`ocr.py:92`）；内部调用 `HardwareAccelerator.has_cuda()`/`onnx_providers`（97-98,109）与 `PaddleOCR(**kwargs)`（128）。
+  - 导入 QPT 的 `CreateExecutableModule as CEM`、`set_default_pip_source`、`PYPI_PIP_SOURCE`（7-9）。
+  - `CEM` 以 `gui.py` 为启动器、`requirements.txt` 为依赖清单，产出目录在 `SAVE_PATH`。
+
 - **实现细节**：
-  - **单例加速器**（13）：`__init__` 用 `HardwareAccelerator.instance()` 而非直接构造，与 `main.py`、`subtitle_detect.py` 共享同一单例，确保 `set_enabled` 开关与探测结果（含 ONNX providers）可见，这是 DML 路由判断成立的前提。
-  - **DML 后端路由**（30-32,97-106）：`predict()` 开篇惰性初始化 `recogniser`；若 `use_dml` 为真，直接 `return self.recogniser.predict(image)`，跳过下方全部 PaddleOCR 结果处理。`init_model()`（91-128）先建 `PaddleModelConfig`（92）；当 `not has_cuda() and onnx_providers` 时（97-98）尝试构造 `DmlOcrRecogniser()`，成功置 `use_dml=True` 并返回（99-103），任何异常都打印 `"[DirectML] 初始化失败，回退 PaddlePaddle/CPU: ..."` 并置 `use_dml=False`（104-106）。
-  - **PaddleOCR 3.x 适配**（34-42）：非 DML 路径用 `list(self.recogniser.predict_iter(image))`（35）取首个结果字典，读取 `dt_polys`/`rec_texts`/`rec_scores`（40-42）；空结果返回 `([],[])`（36-37,44-45）。
-  - **格式转换**（47-62）：遍历 `dt_polys` 把多边形转成整数点列表 `points`，同时算 AABB 存入 `coordinate_list`（51-59）；`rec_texts` 与 `rec_scores` 用 `zip` 组装 `rec_res`（62）。
-  - **行聚类**（64-75）：对每个 AABB 的 `ymin` 调 `y_round()`，与已有行差值 `<=10` 归为同一行（65-70）；再把每个 AABB 的 `ymin` 对齐到所属行 `j`（72-75）。`y_round` 计算 `y_min=y+10-y%10`、`y_max=y-y%10`，取距离近者（18-24）。
-  - **排序**（77-89）：`sorted(..., key=lambda x: (x[0][2], x[0][0]))`（79），先 ymin 后 xmin；随后重建为 4 点框 `[(xmin,ymin),(xmax,ymin),(xmax,ymax),(xmin,ymax)]`（86）。
-  - **device 与 kwargs**（108-128）：`has_cuda()` 为真用 `'gpu:0'` 否则 `'cpu'`（109-112）；kwargs 含 `text_detection_model_dir`/`text_recognition_model_dir`、`use_doc_orientation_classify=False`、`use_doc_unwarping=False`、`use_textline_orientation=False`、`text_rec_score_thresh=0`、`device`，模型名非空时才加 `*_model_name`（114-126）。
-  - **get_coordinates 算法**（131-150）：仅处理 list；取 4 点后按 `xmin=max(x1,x4), xmax=min(x2,x3), ymin=max(y1,y2), ymax=min(y3,y4)`（145-148）算收缩 AABB，依赖框点顺序"左上→右上→右下→左下"，与 `predict()` 重建顺序及 `DmlOcrRecogniser.predict` 输出顺序一致。
-- **维护与重构注意点**：
-  - **双后端一致性**：`OcrRecogniser.predict()` 与 `DmlOcrRecogniser.predict()` 输出结构必须严格一致（`dt_box` 四点顺序、`rec_res` 二元组）；`get_coordinates()` 依赖该顺序，任一侧改动都要回归验证两条路径。
-  - **强版本耦合**：`predict_iter`、`dt_polys`/`rec_texts`/`rec_scores` 字段、`device` 参数均为 PaddleOCR 3.x 约定；升级/回退到 2.x 需重写（2.x 用 `ocr()` 与 `dt_boxes`/`rec_res`）。
-  - `rec_texts` 与 `rec_scores` 长度不一致时 `zip`（62）会静默截断，导致与 `dt_box` 不对齐。
-  - `predict()` 中 `coordinate_list` 的 AABB 与输出 `sorted_dt_box` 并非同一对象，排序后重建会丢失原始多边形细节（51-59 vs 84-87），调试时无法还原真实检测形状。
-  - `get_coordinates()` 的收缩算法对非矩形/倾斜文本框可能算出负宽高；跨模块复用需谨慎。
-  - DML 初始化失败仅 print 回退（105），无结构化告警；若需知晓实际生效后端，应读取 `use_dml`/`recogniser.active_provider`。
+  - `WORK_DIR` 为文件向上三级（13 行，即项目根）；`LAUNCH_PATH=gui.py`（14）；`SAVE_PATH` 为项目根同级的 `vse_out`（15）；`ICON_PATH=design/vse.ico`（16）。
+  - 环境变量 `QPT_Action == "True"` 时调用 `set_default_pip_source(PYPI_PIP_SOURCE)`（18-19）。
+  - `CEM` 参数：`hidden_terminal=False`、`sub_modules=[]`（21-29）。
+
+- **维护注意点**：
+  - 脚本无命令行参数解析，不接收 `--cuda` 之类开关；OCR 统一走 onnxruntime，CPU 版与 DML 版 `onnxruntime` 包二选一，由 `requirements.txt` 决定，打包前确认依赖文件版本正确。
+  - `WORK_DIR` 依赖固定的三级目录结构，移动脚本位置需重新核对。
+  - `sub_modules=[]` 为空，后续若需拆分模块需在 `CEM` 配置处扩展。
 
 ---
 
-### tools/paddle_model_config.py
-- **路径**：`backend/tools/paddle_model_config.py`
-- **规模**：159 行
-- **职责**：根据配置语言与运行模式（fast/auto/accurate）解析 PaddleOCR V5 的文本检测与识别模型路径及 `model_name`；集中维护多语言到识别模型的映射，并从模型目录的 `inference.yml` 读取 `Global.model_name`。
+### backend/tools/ocr.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/ocr.py`
+- **规模**：117 行
+- **职责**：OCR 门面。统一委托 `OnnxOcrRecogniser`，对外保持 `predict(bgr_image) -> (dt_box, rec_res)` 接口；负责把全局配置解析为 provider / 档位 / 设备，并对结果排序与行对齐。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `PaddleModelConfig` | 5 | 模型配置解析类 |
-| `__init__()` | 6-54 | 读取语言/模式，构造语言组，命中多语言时调用 `_resolve_models()` |
-| `_get_v5_rec_model_name(lang)` | 56-83 | 语言 → V5 识别模型目录名映射 |
-| `_read_model_name_from_yaml(dir)` | 85-108 | `@staticmethod`，从 `inference.yml` 读取 `Global.model_name` |
-| `_resolve_models()` | 110-159 | 解析 det/rec 模型路径与名称，含 `use_mobile` 判断与 fallback |
+|------|------|------|
+| `OcrRecogniser` | 12-99 | OCR 门面类 |
+| `__init__` | 15-18 | 持有 `recogniser=None`、单例 `hardware_accelerator`、`backend_used=None` |
+| `y_round` | 20-26 | 将 y 取整到最近的 10 的倍数（就近舍入） |
+| `_resolve_config` | 28-50 | 依据 `config` 解析 `(providers, tier, device_id)` |
+| `init_model` | 52-61 | 构造 `OnnxOcrRecogniser`，记录 `backend_used=recogniser.active_provider` |
+| `predict` | 63-69 | 懒加载识别器，调用底层 `predict` 后排序 |
+| `_sort_results` | 71-99 | 先按 y 后按 x 排序，并将同一行的 y 对齐 |
+| `get_coordinates` | 102-117 | 模块级函数，从 `dt_box` 提取 `(xmin,xmax,ymin,ymax)` 列表 |
+
 - **调用关系**：
-  - 被 `main.py:31,54` 创建；被 `ocr.py:6,92` 与 `subtitle_detect.py:2,19` 创建。
-  - 构造时接收一个 `hardware_accelerator` 实例（6），`_resolve_models()` 用其 `has_accelerator()` 判断加速可用性（118-119）。
-  - 内部依赖 `backend.config` 的 `BASE_DIR`、`config`（`config.language.value`、`config.mode.value`）与 `os`。
+  - 导入 `config`（7）、`HardwareAccelerator`（8）、`OnnxOcrRecogniser`（9）。
+  - `init_model` 把 `config.recBatchNumber.value` 作为 `rec_batch_size` 传入底层识别器（58）。
+  - 被 `subtitle_ocr.py:7,136` 导入并实例化；`subtitle_ocr.py` 同时导入 `get_coordinates` 用于坐标提取。
+
 - **实现细节**：
-  - **初始化字段**（9-21）：`REC_CHAR_TYPE=config.language.value`；`MODEL_BASE=BASE_DIR/models`；`MODEL_VERSION='V5'`；`REC_IMAGE_SHAPE='3,48,320'`；`REC_MODEL_PATH`/`DET_MODEL_PATH`/`DET_MODEL_NAME`/`REC_MODEL_NAME` 初始为 `None`。语言命中 `MULTI_LANG` 才解析模型（50-54）。
-  - **语言组定义**（24-47）：`LATIN_LANG`（24-30）、`ARABIC_LANG`（31）、`CYRILLIC_LANG`（32-37）、`DEVANAGARI_LANG`（38-41）、`OTHER_LANG`（42-45），`MULTI_LANG` 为五组拼接（46-47）。
-  - **语言 → V5 识别模型名映射**（`_get_v5_rec_model_name`，56-83）：`ch`/`chinese_cht`/`japan`→`PP-OCRv5_server_rec_infer`（61-62）；`en`→`PP-OCRv5_server_rec_infer`（63-64）；`korean`→`korean_PP-OCRv5_mobile_rec_infer`（65-66）；`LATIN_LANG`→`latin_PP-OCRv5_mobile_rec_infer`（67-68）；`ARABIC_LANG`→`arabic_PP-OCRv5_mobile_rec_infer`（69-70）；`CYRILLIC_LANG`→`cyrillic_PP-OCRv5_mobile_rec_infer`（71-72）；`DEVANAGARI_LANG`→`devanagari_PP-OCRv5_mobile_rec_infer`（73-74）；`th`（75-76）、`el`（77-78）、`ta`（79-80）、`te`（81-82）各有专用 mobile 模型；其他返回 `None`（83）。
-  - **`use_mobile` 判断**（116-122）：先算 `has_accel = hardware_accelerator is not None and has_accelerator()`（118-119）；`use_mobile = config.mode.value == 'fast' or (config.mode.value == 'auto' and not has_accel)`（120-122）——即 fast 模式恒用轻量模型，auto 模式仅在无硬件加速时用轻量模型，与 README 描述一致（auto 在 CPU 下走轻量、GPU 下走精准）。
-  - **det 模型解析**（124-131）：`use_mobile` 时优先 `PP-OCRv5_mobile_det_infer`，不存在回退 `PP-OCRv5_server_det_infer`（125-127）；否则直接用 `PP-OCRv5_server_det_infer`（129）；均不存在返回 `None`（130-131）；再读 `det_model_name`（133）。
-  - **rec 模型解析**（135-159）：`use_mobile` 且语言属于 `('ch','chinese_cht','en','japan')` 时共用 `PP-OCRv5_mobile_rec_infer`，存在即返回（136-140），不存在则回退按语言选择；否则按 `_get_v5_rec_model_name` 取目录名（144-146），按需拼 `_infer` 后缀（148-150），再做一次路径 fallback（152-156），最后读 `rec_model_name` 返回（158-159）。
-  - `_read_model_name_from_yaml`（85-108）：逐行扫描 `inference.yml`，进入 `Global:` 段后匹配 `model_name:`，去引号返回（96-102）；遇下一个顶级 section 退出（104-105）；异常吞掉返回 `None`（106-108）。
-- **维护与重构注意点**：
-  - **映射死分支**：`th`、`el` 不在 `MULTI_LANG`（24-47）任一语言组中，`__init__`（50）不会为它们触发解析，因此 `_get_v5_rec_model_name` 的 `th`/`el` 分支（75-78）实际不可达；`ta`、`te` 在 `OTHER_LANG` 可触发。若需支持泰语/希腊语，须把 `th`/`el` 加入语言组。
-  - **命名不一致**：`subtitle_ocr.py:96` 使用 `'korea'`、`'japan '`（带尾空格），而此处语言名为 `'korean'`、`'japan'`；`dump_debug_info` 的语言判断可能失配。
-  - `use_mobile` 依赖 `hardware_accelerator.has_accelerator()`（118-119），而 `HardwareAccelerator.set_enabled(False)` 会使该方法返回 False，从而在 auto 模式下误选轻量模型；修改加速开关时需意识到会连带影响模型选择。
-  - `MODEL_VERSION='V5'`（14,53）与 `REC_IMAGE_SHAPE`（16）为硬编码/未被读取字段（后者全项目无引用，属死代码），重构时可清理或真正接入。
-  - 强依赖本地模型目录 `BASE_DIR/models/V5/...` 与 `inference.yml` 格式；模型升级（V6）需同时改路径、映射表与 `_read_model_name_from_yaml`。
-  - resolve 失败时 4 个字段保持 `None`（18-21,50-54），下游 `ocr.init_model()` 会把 `None` 传给 `PaddleOCR`，可能在运行时才报错，缺少显式告警。
+  - `_resolve_config`：`backend = config.ocrBackend.value`；若 `hardwareAcceleration` 关闭则强制 `backend='cpu'`（32-33）；`dml` → DML+CPU providers，`cpu` → 仅 CPU，`auto` → 依据 `hardware_accelerator.has_dml()` 决定（34-41）；档位取 `config.modelTier.value`（42）；`dmlDeviceId` 经 `int(str(raw).strip())` 转换，非法值置 `None`（43-49）。
+  - `_sort_results`：把每个框转为 `[min_x,max_x,min_y,max_y]`（76-80），以 `y_round(min_y)` 聚类行（容差 10，82-90），再按 `(y, x)` 排序（93），最后重建四点框（97）。
+  - `get_coordinates`：从四点框取 `xmin=max(x1,x4)`、`xmax=min(x2,x3)`、`ymin=max(y1,y2)`、`ymax=min(y3,y4)`（112-116），即按上左下右的顶点顺序计算 AABB。
+
+- **维护注意点**：
+  - 本模块**不依赖 PaddleOCR / PaddlePaddle**；OCR 能力全部来自 `OnnxOcrRecogniser`。
+  - `backend_used` 记录的是 `recogniser.active_provider`（实际生效的首个 provider），可用于 UI 显示真实后端；`hardwareAcceleration` 关闭时即使 `ocrBackend='dml'` 也会走 CPU。
+  - `_sort_results` 的行容差固定为 10，`y_round` 也以 10 取整，二者需一致；这是字幕后处理稳定阅读顺序的关键，改动需回归验证。
+  - `get_coordinates` 假设 `dt_box` 顶点顺序为"左上、右上、右下、左下"；若 `OnnxOcrRecogniser.predict` 输出顺序变化，会直接算错 AABB。
+  - `OnnxOcrRecogniser` 构造异常未被此处捕获，会向上传播到 `subtitle_ocr.ocr_task_consumer`，最终触发其 `except` 分支并提前结束消费线程；缺失模型时应先由 `env_check` 检查。
 
 ---
 
-### tools/process_manager.py
-- **路径**：`backend/tools/process_manager.py`
+### backend/tools/onnx_ocr.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/onnx_ocr.py`
+- **规模**：461 行
+- **职责**：**OCR 统一后端核心**。基于 ONNX Runtime 直接推理官方 PP-OCRv6 ONNX 模型，支持 CPU 与 DirectML 两种 provider，提供文本检测 + 识别，以及模型下载、字典读取、设备枚举等配套能力。前后处理内联实现，不依赖 PaddleX 私有 API。
+- **关键类/函数**：
+
+| 名称 | 行号 | 说明 |
+|------|------|------|
+| `_MODEL_BASE` | 39-42 | 官方 ONNX 模型下载基址（百度 bos） |
+| `MODEL_TIERS` | 43 | 档位元组 `('light', 'precise')` |
+| `_DET_MODEL_DIR` | 45 | 检测模型目录名 `PP-OCRv6_small_det_onnx`（两档共用） |
+| `_REC_MODEL_DIRS` | 46-49 | `light→PP-OCRv6_tiny_rec_onnx`、`precise→PP-OCRv6_small_rec_onnx` |
+| `MODEL_INFO` | 52-56 | 官方源目录名 → 用途说明，供 GUI 提示下载 |
+| 检测参数 | 59-63 | `_DET_THRESH=0.3`、`_DET_BOX_THRESH=0.6`、`_DET_UNCLIP_RATIO=1.5`、`_DET_MAX_CANDIDATES=1000`、`_DET_LIMIT_SIDE_LEN=960` |
+| `_REC_IMAGE_SHAPE` | 66 | 识别输入 `(C,H,W)=(3,48,320)` |
+| `_default_cache_dir` | 69-74 | 模型缓存根目录：`VSE_ONNX_MODEL_DIR` 覆盖，否则 `~/.paddleocr/onnx` |
+| `model_download_url` | 77-79 | 返回某模型目录名的官方下载 URL（`{base}/{name}.tar`） |
+| `check_models` | 82-91 | 检查指定档位模型是否齐全，返回 `(missing, directory)` |
+| `list_dml_devices` | 94-119 | 枚举 DML 设备，返回含 `index/name/vendor_id/device_id` 的字典列表 |
+| `_download_model` | 122-147 | 按需下载并安全解包单个模型，返回 `inference.onnx` 路径 |
+| `_read_char_dict` | 150-187 | 从 `inference.yml` 解析 CTC 字符字典，补 `blank` 与 `space` |
+| `_DBPostProcess` | 190-272 | DBNet 检测后处理：阈值分割、轮廓、unclip、四点框 |
+| `__call__` | 201-230 | 概率图 → `(boxes, scores)` |
+| `_mini_boxes` | 232-246 | `cv2.minAreaRect` 取最小矩形并按左上/右上/右下/左下定序 |
+| `_box_score_fast` | 248-260 | 框内概率均值作为置信度 |
+| `_unclip` | 262-272 | `pyclipper` 外扩多边形 |
+| `_CTCDecode` | 275-293 | CTC 贪心解码：(T,C) → `(text, confidence)` |
+| `__call__` | 282-293 | 去重复、去 blank(索引0)、取字符与平均置信度 |
+| `OnnxOcrRecogniser` | 296-461 | ONNX Runtime 识别器主类 |
+| `__init__` | 311-355 | 解析 providers / 档位 / 设备，下载并加载 det（及 rec）会话 |
+| `_det_predict` | 357-383 | 检测：长边缩放至 960(128 倍数)、归一化、推理、后处理 |
+| `_prepare_rec_image` | 385-399 | 单框透视裁剪 → 归一化 → padding 为 `(C,H,W)` 张量 |
+| `_rec_predict_batch` | 401-416 | 按 `rec_batch_size` 分批、批内按最大宽度补 pad 后识别 |
+| `_CropRotate` | 418-436 | 四点框透视变换为水平矩形 |
+| `detect` | 438-441 | 仅检测，返回 4 点坐标的 `np.int32` 数组列表 |
+| `predict` | 443-461 | 与 `OcrRecogniser.predict` 兼容，返回 `(dt_box, rec_res)` |
+
+- **调用关系**：
+  - 被 `ocr.py:9,54` 导入并构造（统一 OCR 入口）。
+  - 被 `subtitle_detect.py:6,27` 以 `det_only=True` 构造（精准模式逐帧检测）。
+  - 被 `env_check.py:10-13` 导入 `MODEL_INFO / check_models / list_dml_devices / model_download_url / _download_model / _default_cache_dir`。
+  - 被 `hardware_accelerator.py:7` 导入 `list_dml_devices`。
+  - 运行时依赖 `onnxruntime`、`cv2`、`numpy`、`pyclipper`（可选）、`yaml`。
+
+- **实现细节**：
+  - **档位**：`MODEL_TIERS=('light','precise')`；两档共用 det `PP-OCRv6_small_det`，差异仅在 rec（light=tiny / precise=small），非法档位在 `OnnxOcrRecogniser.__init__` 回退为 `precise`（318-319）。
+  - **providers**：未显式传入时按 `DmlExecutionProvider → CPUExecutionProvider` 中可用项构造，且至少保留 CPU（321-329）；指定 `dml_device_id` 时把 DML provider 转成 `(name, {'device_id': str(id)})`（331-338）；`active_provider` 取 `det_session.get_providers()[0]`（347）。
+  - **模型缓存**：默认 `~/.paddleocr/onnx`，`VSE_ONNX_MODEL_DIR` 可覆盖（69-74）。`check_models` 以各模型目录下是否存在 `inference.onnx` 判定齐全（90）。`_download_model` 下载 `.tar` 并解包，解包前校验成员路径必须位于目标目录内以防路径穿越（139-143），缺 `inference.onnx` 则抛错（145-146）。
+  - **字典**：`_read_char_dict` 用 `yaml.safe_load` 解析 `inference.yml` 的 `PostProcess.character_dict`（158-161），避免手工切分把引号读进字典；无 PyYAML 时逐行去成对引号回退（163-179）；最终 `['blank'] + chars`，若不含空格再追加 `' '`（184-187），与 CTCLabelDecode 的 `add_special_char` / `use_space_char` 行为对齐。
+  - **检测后处理**：`_DBPostProcess.__call__` 阈值分割 → `findContours` → 限 `max_candidates` → `_mini_boxes` + 短边 >3 → `_box_score_fast` 置信度过滤 → `_unclip` 外扩 → 缩放回原图并 clip（201-230）。
+  - **识别批处理**：`_prepare_rec_image` 将框缩放到高 48、宽按比例且 ≤3200，减 0.5 除 0.5 归一化后 pad 到 `(3,48,target_w)`；`_rec_predict_batch` 按 `rec_batch_size`（`max(1, ...)`，317）分批，批内 pad 到最大宽度（408-412），逐条 CTC 解码（414-415）。
+  - **最终输出**：`predict` 过滤空文本，四点框转为 `[(x,y), ...]` 整数元组，与 `rec_res` 一一对应（455-461）。
+
+- **维护注意点**：
+  - 本模块 docstring（19-20 行）仍描述"构造失败时由 `OcrRecogniser` 回退到 PaddlePaddle/CPU 路径"，但当前 `ocr.py` 已无 PaddlePaddle 依赖，实际异常会向上传播；该注释与实现不符，维护时应以代码为准。
+  - `det` 长边缩放固定 `_DET_LIMIT_SIDE_LEN=960` 且向上取 128 倍数（361-365）；改动需同步 `inference.yml` 中 `DetResizeForTest.resize_long`，否则精度下降。
+  - `_read_char_dict` 的字典**长度必须与 rec 模型输出类别数一致**；更换 rec 模型时务必使用其自带的 `inference.yml`，否则会出现解码错位（如数字被识别成带引号字符）。
+  - `_det_predict` 的归一化参数（mean `[0.485,0.456,0.406]` / std `[0.229,0.224,0.225]`）与 `_prepare_rec_image` 的 `(x-0.5)/0.5` 不同，分别对应 det/rec 官方预处理，不可混用。
+  - `_download_model` 使用 `urllib.request.urlretrieve` 同步下载，无进度回调；大文件下载期间 `OnnxOcrRecogniser` 构造会阻塞，GUI 侧应先经 `env_check` 预检/预下载。
+  - `pyclipper` 为可选依赖；缺失时 `_DBPostProcess.__call__` 直接用原始轮廓代替外扩（218-220），检测框会偏小，建议在依赖中保留 `pyclipper`。
+  - `OnnxOcrRecogniser` 每次构造都会执行 `ort.InferenceSession` 加载模型，`det_only` 时只加载 det（349）；`ocr.py` 与 `subtitle_detect.py` 各自持有实例，会重复加载 det 会话。
+
+---
+
+### backend/tools/process_manager.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/process_manager.py`
 - **规模**：130 行
-- **职责**：以单例形式集中登记子进程对象或 PID，提供并发终止、按 PID/按对象强杀能力，并通过 `atexit` 在解释器退出时兜底清理所有登记的进程；区分 Windows 与类 Unix 平台的强杀命令。
+- **职责**：子进程生命周期管理器（单例）。登记 `Popen` 对象或 PID，提供批量/单个终止，并在解释器退出时自动清理所有登记进程。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `ProcessManager` | 14 | 进程管理器类 |
-| `_instance` | 19 | 单例类变量 |
-| `instance()` | 21-26 | `@classmethod`，惰性创建单例（无锁） |
-| `__init__()` | 28-34 | 初始化 `processes` 字典、`logger`，注册 `atexit.register(self.terminate_all)` |
-| `add_process()` | 36-50 | 登记 `Popen` 对象，默认键 `Process:{id(process)}` |
-| `add_pid()` | 52-56 | 登记 PID，默认键 `Pid:{pid}` |
-| `remove_process()` | 58-69 | 按 key 移除，返回是否成功 |
-| `terminate_all()` | 71-85 | 用线程池并发终止所有登记项并清空字典 |
-| `terminate_by_process()` | 87-116 | `terminate`→`join/wait`→按存活判断决定 `kill`/按 PID 强杀 |
-| `terminate_by_pid()` | 118-130 | 平台相关的系统命令强杀（`taskkill`/`pkill`+`kill`） |
+|------|------|------|
+| `ProcessManager` | 14-130 | 进程管理器单例类 |
+| `instance` | 21-26 | 类方法，懒加载单例 |
+| `__init__` | 28-34 | 初始化 `processes={}`，`atexit.register(self.terminate_all)` |
+| `add_process` | 36-50 | 登记 `Popen` 对象，键为 `name` 或 `Process:{id(process)}` |
+| `add_pid` | 52-56 | 登记裸 PID，键为 `name` 或 `Pid:{pid}` |
+| `remove_process` | 58-69 | 按 key 移除，返回是否成功 |
+| `terminate_all` | 71-85 | 用线程池并发终止全部登记项，最后清空字典 |
+| `terminate_by_process` | 87-116 | 对 `Popen` 先 `terminate`、超时 `kill`，必要时按 PID 强制终止 |
+| `terminate_by_pid` | 118-130 | 平台命令强杀：Windows `taskkill /F /T /PID`，其他 `pkill`/`kill -9` |
+
 - **调用关系**：
-  - `main.py:32` 导入，`main.py:495,513,1043` 调用 `add_process()`。
-  - `gui.py:27,103` 调用 `terminate_all()`。
-  - `ui/home_interface.py:18,295,298,431,449,462,623` 调用 `terminate_by_pid()`、`terminate_by_process()`、`terminate_all()`、`add_pid()`、`add_process()`。
-  - `python_runner.py:6,120` 在 `stop()` 中调用 `terminate_by_pid()`。
-- **实现细节**：
-  - **单例**（19-26）：`instance()` 检查 `_instance`，为 `None` 时创建；进程内共享一份登记表。
-  - **atexit 兜底**（34）：解释器退出自动调用 `terminate_all()`。
-  - **登记**：`add_process`（44-50）忽略 `None` 对象，键为 `name` 或 `Process:{id(process)}`；`add_pid`（52-56）键为 `name` 或 `Pid:{pid}`。
-  - **并发终止**（71-85）：`ThreadPoolExecutor`（未指定 max_workers）遍历 `list(self.processes.items())`，`int` 走 `terminate_by_pid`，对象走 `terminate_by_process`，`concurrent.futures.wait` 等全部完成后 `clear()`（85）。
-  - **按对象终止**（87-116）：`poll()` 若非 `None`（进程已结束）直接返回（92-94）；否则 `terminate()`（97），`join(timeout=3)`（98-102）、`wait(timeout=3)`（103-107）均吞异常；随后**仅当 `process.poll() is None`（进程仍未退出）时**才执行 `kill()` 并调用 `terminate_by_pid(process.pid)`（108-113），避免对已退出或 PID 被复用的进程重复强杀而误伤无关进程；异常整体吞掉（114-116）。
-  - **强杀逻辑/平台差异**（118-130）：Windows 执行 `taskkill /F /T /PID <pid>`（122-123，`/T` 含子进程树）；其他平台先 `pkill -9 -P <pid>` 再 `kill -9 <pid>`（125-128）；异常打印（129-130）。
-- **维护与重构注意点**：
-  - **存活判断是关键不变量**：`terminate_by_process()` 的两次 `poll()` 检查（92-94,110）是防止误杀的核心，重构时不可移除；`terminate()` 后必须给进程退出留出 `join/wait` 窗口，再判断是否升级为 `kill`。
-  - **死代码**：`weakref`（5）、`signal`（6）、`os`（7）导入未使用；`self.logger`（31）创建后从未使用，终止过程全靠 print；类注释（15-18）声称"使用弱引用避免内存泄漏"，但 `processes`（30）实际为强引用，文档与实现不符。
-  - 单例非线程安全（21-26）；`terminate_all()` 遍历快照（75），并发 `add_*` 后新增的进程可能落在 `clear()` 之后而未被清理。
-  - 强杀依赖外部命令存在（Windows 的 `taskkill`、Unix 的 `pkill`/`kill`），超时分别 3s/2s+3s（122-128）；命令失败仅打印，不保证进程真死。
-  - `add_process`/`add_pid` 同名键会覆盖旧条目，调用方需保证命名唯一。
+  - `python_runner.py:6,120` 在 `stop()` 中通过 `ProcessManager.instance().terminate_by_pid(pid)` 终止子进程。
+  - GUI 退出时（`gui.py:closeEvent`）调用 `terminate_all()`。
+  - 无其他模块级依赖（仅标准库）。
+
+- **实现细节**：`terminate_by_process` 先 `poll()` 判断已退出则直接返回（92-94），再 `terminate()`、`join(timeout=3)`、`wait(timeout=3)`（97-107），仅在 `poll()` 仍为 `None` 时 `kill()` 并按 PID 强杀（110-113）；`terminate_all` 以 `ThreadPoolExecutor` 并发处理，区分 `int`（PID）与对象两类（75-79）。
+
+- **维护注意点**：
+  - `terminate_by_process` 中"poll 为 None 才强杀"的判断（108-113 行注释）是为避免对已退出或 PID 被复用的进程重复 `kill`/`taskkill` 误伤无关进程，重构时务必保留。
+  - `add_process` 用 `id(process)` 作默认键，进程对象被回收后 ID 可能复用；建议显式传 `name`。
+  - `atexit` 注册的 `terminate_all` 在异常退出时也会执行；`terminate_by_pid` 在 Windows 用 `taskkill /T` 连带子进程，可能影响共享同一进程树的外部分支。
+  - `logging` 仅取 logger（31 行）未实际使用，日志走 `print`；`weakref`、`signal` 导入但未使用，属冗余。
 
 ---
 
-### tools/python_runner.py
-- **路径**：`backend/tools/python_runner.py`
+### backend/tools/python_runner.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/python_runner.py`
 - **规模**：169 行
-- **职责**：异步启动一个 Python 子脚本，用独立线程读取其 stdout/stderr 并触发回调，用监控线程等待退出码并触发完成回调，提供运行态查询、停止与等待接口。
+- **职责**：异步 Python 子进程运行器。以 `sys.executable` 启动脚本，通过独立线程读取 stdout/stderr 并分发回调，监控退出码，支持停止与等待。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `AsyncPythonRunner` | 8 | 异步 Python 子进程运行器 |
-| `__init__()` | 9-17 | 初始化 process、三类线程/回调列表、returncode |
-| `register_callback()` | 19-29 | 注册 stdout/stderr/complete 回调 |
-| `_notify_callbacks()` | 31-40 | 按流类型分发回调 |
-| `start()` | 42-89 | 组装命令、`Popen`、启动 reader 与 monitor 线程 |
-| `_start_reader_thread()` | 91-105 | 逐行读取流并通知回调，结束关闭流 |
-| `_monitor_process()` | 107-111 | `wait()` 获取 returncode 并触发退出回调 |
-| `is_running()` | 113-115 | `returncode is None` 表示仍在运行 |
-| `stop()` | 117-121 | 经 `ProcessManager.terminate_by_pid()` 停止并置 `process=None` |
-| `wait()` | 123-128 | join 监控线程，返回是否结束 |
-| 使用示例 | 130-169 | `if __name__ == "__main__"` 内演示回调与启停 |
+|------|------|------|
+| `AsyncPythonRunner` | 8-128 | 异步运行器类 |
+| `__init__` | 9-17 | 初始化进程句柄、三类线程、三类回调列表与 `returncode` |
+| `register_callback` | 19-29 | 注册 stdout / stderr / complete 回调 |
+| `_notify_callbacks` | 31-40 | 按流类型通知对应回调 |
+| `start` | 42-89 | 组装命令、启动 `Popen`、起读取线程与监控线程 |
+| `_start_reader_thread` | 91-105 | daemon 线程逐行读取流并通知回调，结束关闭流 |
+| `_monitor_process` | 107-111 | `wait()` 后设 `returncode` 并触发退出回调 |
+| `is_running` | 113-115 | `returncode is None` 判定运行中 |
+| `stop` | 117-121 | 经 `ProcessManager` 按 PID 终止，清空句柄 |
+| `wait` | 123-128 | `join` 监控线程，返回是否已结束 |
+
 - **调用关系**：
-  - 被 `ui/timeline_sync_interface.py:10,26` 导入并实例化 `self.python_runner = AsyncPythonRunner()`。
-  - 内部通过 `from .process_manager import ProcessManager`（6）调用 `ProcessManager.instance().terminate_by_pid()`（120）。
-- **实现细节**：
-  - `start()`（42-89）：已在运行则抛 `RuntimeError`（54-55）；命令为 `[sys.executable] + python_args + [script_path] + args`（57-66）；`Popen`（69-78）设 `stdout=stderr=PIPE`、`encoding='utf-8'`、`text=True`、`bufsize=1`、`universal_newlines=True`、`cwd`；随后启动 stdout/stderr 两个 reader 线程（81-82）与一个 daemon 监控线程（85-89）。
-  - `_start_reader_thread()`（91-105）：闭包 `reader()` 用 `for line in iter(stream.readline, '')` 逐行通知（96-97），EOF 后 `stream.close()`（98）；线程 daemon 且加入 `_output_threads`（100-105）。
-  - `_monitor_process()`（107-111）：`self.returncode = self.process.wait()` 后遍历 `_exit_callbacks` 调用。
-  - `stop()`（117-121）：委托全局进程管理器强杀 PID，随后把 `self.process` 置 `None`。
-- **维护与重构注意点**：
-  - **状态不一致**：`stop()`（121）把 `process` 置 `None` 但不重置 `returncode`；若进程被杀后监控线程尚未写入 returncode，`is_running()`（115）仍返回 `True`。建议 stop 后显式置一个终止态 returncode。
-  - `start()` 仅检查 `self.process is not None`（54），stop 后可重新启动，但旧 reader/monitor 线程与回调列表未清理，回调会累积。
-  - `bufsize=1`（行缓冲）需 `text=True` 配合（已设）；reader 线程未对外提供 join，`wait()` 只等 monitor（123-128）。
-  - 回调（37-40,110-111）若在 UI 线程外直接操作控件会线程不安全；回调自身抛异常会使对应 reader/monitor 线程静默退出。
-  - 130-169 为 `if __name__ == "__main__"` 使用示例（含硬编码 `path/to/your_script.py`），属演示代码，可按需移除。
+  - 导入 `ProcessManager`（6），`stop()` 依赖其按 PID 终止子进程。
+  - UI 层（如高级设置中执行脚本/工具）实例化并注册回调；文件末尾 `if __name__ == "__main__"`（130-169）为使用示例。
+
+- **实现细节**：命令为 `[sys.executable] + python_args + [script_path] + args`（57-66）；`Popen` 以 `text=True`、`encoding='utf-8'`、`bufsize=1`、`universal_newlines=True` 启动（69-78）；stdout/stderr 各一个读取线程，进程监控一个线程，三者均为 daemon（85-105）。
+
+- **维护注意点**：
+  - `start()` 在已有进程时抛 `RuntimeError("Process is already running")`（54-55），复用实例前需先 `stop()`/`wait()`。
+  - `is_running()` 依据 `returncode`，而 `returncode` 只在监控线程 `wait()` 返回后写入；进程刚结束到回调触发之间存在短暂窗口。
+  - `stop()` 调用 `ProcessManager.terminate_by_pid`，但不清零 `returncode`；停止后 `is_running()` 可能仍短暂为 `True` 直到监控线程结束。
+  - 读取线程用 `iter(stream.readline, '')` 且 daemon，不会阻塞主进程退出；回调在读取线程中同步执行，若回调耗时或抛异常会影响对应流的读取。
+  - `wait(timeout)` 返回的是"监控线程是否还活着"的布尔值，非进程返回码；需返回码应读 `runner.returncode`。
 
 ---
 
-### tools/reformat.py
-- **路径**：`backend/tools/reformat.py`
+### backend/tools/reformat.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/reformat.py`
 - **规模**：223 行
-- **职责**：对 OCR 生成的 SRT 字幕做后处理——修正典型错字、把连写的英文单词切分、规范化空格与标点、按需做中英文分行，原地保存回同一文件。`__main__` 支持命令行传参，可作独立工具调用。
+- **职责**：字幕文本后处理。用 `wordsegment` 对连写的英文单词切分，结合缩写映射与 `typoMap.json` 纠错，做中英文分行与大量标点/空格规范化，原地保存 SRT 文件。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `execute(path, lang='en')` | 16-214 | 主流程：加载配置→逐条格式化→保存 |
-| `format_seg_list(seg_list)` | 58-65 | 把缩写片段还原为带撇号的完整形式 |
-| `typo_fix(text)` | 67-73 | 按 typoMap 做正则替换 |
-| `remove_invalid_segment(seg, text)` | 75-105 | 逆向过滤在文本中找不到对应位置的切分片段 |
-| `__main__` 命令行入口 | 217-222 | 解析 `sys.argv`：路径必填、语言可选（默认 `'ch'`），调用 `execute()` |
+|------|------|------|
+| `execute` | 16-214 | 主流程：加载分词器与纠错表、逐条字幕处理、保存，返回成功与否 |
+| `format_seg_list` | 58-65 | 闭包：把缩写片段补回原词形（如 `im`→`I'm`） |
+| `typo_fix` | 67-73 | 闭包：按 `typo_map` 做正则替换纠错 |
+| `remove_invalid_segment` | 76-105 | 闭包：逆向过滤在文本中找不到的切分片段 |
+| `__main__` 入口块 | 217-222 | 命令行用法：`python -m backend.tools.reformat <srt> [lang]` |
+
 - **调用关系**：
-  - 被 `main.py:189` 调用 `reformat.execute(self.subtitle_output_path, config.language.value)`（在 OCR/后处理阶段）。
-  - 作为脚本独立运行时由 `__main__`（217-222）从命令行接收 `(字幕文件路径, [语言])`。
-  - 内部依赖 `pysrt`（读写 SRT）、`wordsegment`（英文分词）、`re`、`json`，以及配置文件 `backend/configs/typoMap.json`（46）。
-- **实现细节**：
-  - **前置**（20-37）：递归限制提到 100000（20-22，规避 `wordsegment.segment` 的 RecursionError）；文件存在检查（24-27）；`ws.Segmenter().load()`（29-30）；`pysrt.open(path)`（32-37）。
-  - **词形表**（39-56）：`verb_forms` 列出约 50 个常见缩写（`I'm`、`can't`、`won't` 等，39-43）；构建 `verb_form_map`，key 为去撇号小写（如 `"im"→"I'm"`，55-56）。
-  - **typoMap 加载**（46-53）：路径 `os.path.dirname(os.path.dirname(__file__))/configs/typoMap.json`，`json.load` 失败则置 `{}`。
-  - **typo_fix 正则替换**（67-73）：遍历 `typo_map.items()`，对每项 `text = re.sub(re.compile(k, re.I), v, text)`（70），即 key 作为不区分大小写的正则匹配、value 为替换串；单条失败仅打印 Warning（71-72）。
-  - **分词流程**（107-160，逐条 subtitle）：
-    1. `typo_fix(sub.text)` 先修错（114）；超 1000 字符跳过分词（117-119）。
-    2. `wordsegment.segment(sub.text)`（122）；若只切出 1 段，用正则 `(\ni)([^\s])` 在换行后小写 i 前补空格再切一次（123-124）。
-    3. `format_seg_list`（130）：命中 `verb_form_map` 的片段变成 `[seg, 完整形式]` 二元，便于按两种形态定位。
-    4. 中文前多空格压成单空格（133）；`lang in ["ch","ch_tra"]` 时把双空格替换为换行实现中英文分行（135-136）。
-    5. `remove_invalid_segment`（139）逆向过滤片段；随后正向遍历片段，用 `(.*?)(s[0]|s[1])` 正则（144-146）在剩余文本中定位并逐段切行（141-160）。
-    6. `ss = " ".join(lines)` 拼回（157-160）。
-  - **二次规范化**（162-191）：再次 `typo_fix`（162）；大写字母前补空格（164）；删重复空格（166）；`。`→`.`（167）；标点前多空格（169）、`'` 前后空格（171）、换行后空格（173）、行首空格（175）清理；`-`/`%` 左侧空格（177,179）；`·$`→`.`（181）；`Dr. ` 空格（183）；中文引号→英文（185）、中文逗号→英文（187）；`.,!?` 后补空格（189）；双换行合并（190）；`sub.text = ss.strip()`（191）。
-  - **保存**（202-209）：`subs.save(path, encoding='utf-8')`，返回成功/失败；`modified_count` 统计修改条数（107,193-194）。
-  - **命令行入口**（217-222）：参数不足 2 个时打印 `"用法: python -m backend.tools.reformat <字幕文件.srt> [语言]"` 并 `sys.exit(1)`；否则 `execute(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else 'ch')`。
-- **维护与重构注意点**：
-  - `lang` 仅对 `"ch"`/`"ch_tra"` 生效（135），`japan`/`korean` 等其他非英文语言不做分行，行为需留意；命令行入口默认语言为 `'ch'`（222），而 `execute` 函数默认值为 `'en'`（16），两者默认值不同，调用时需显式传参避免歧义。
-  - `typo_fix` 的 key 被当作正则（70），typoMap 若含 `.`/`(`/`[` 等元字符会误匹配；扩展时需转义或明确按正则设计。
-  - `remove_invalid_segment`（75-105）与主循环（141-160）重复实现"按片段首字符正则定位"逻辑，且前者用 `finditer(...)[-1]` 取最后一次出现、后者用 `re.search` 取第一次，语义不同，重构时可统一。
-  - 大量 `try/except` 仅打印并继续（32-37,47-53,71-72,87-90,102-105,125-128,196-200,206-209,211-214），单条失败静默保留原文本，排查困难。
-  - `verb_forms`/`verb_form_map` 为模块内每次 `execute` 重建，可提升为模块常量；`format_seg_list` 依赖 `wordsegment` 输出小写以命中 `verb_form_map`（61），需关注分词库版本。
+  - 依赖 `pysrt`（读写 SRT）、`wordsegment`（分词）、`json`/`re`（纠错与规范化）。
+  - 纠错表来自 `backend/configs/typoMap.json`（46 行，`__file__` 上两级定位）。
+  - 由 UI 或命令行调用处理字幕文件。
+
+- **实现细节**：开头提升递归上限至 100000（21-22）以规避 `wordsegment` 递归错误；`verb_forms`（39-43）构建缩写映射；分词后对 `中文` 前多空格压缩、中英文按双空格分行（132-136）；随后一系列 `re.sub` 规范化（大写前加空格、去重复空格、中文标点转英文、逗号问号叹号后加空格等，162-191）；逐行 `try/except` 保证单行失败不影响整体（109-200）；`subs.save(path, encoding='utf-8')` 原地保存（203）。
+
+- **维护注意点**：
+  - 超过 1000 字符的字幕行跳过分词（117-119），避免长文本性能问题。
+  - `typoMap.json` 加载失败时回退空字典（50-53），纠错表路径依赖固定目录结构。
+  - 正则中大量硬编码语言标记：`lang in ["ch","ch_tra"]` 触发中文分行（135）；`typo_fix` 仅在特定情形生效；调整语言代码需同步这些分支。
+  - `wordsegment.Segmenter()` + `.load()` 为显式加载词频的用法；若依赖升级改变 API，需在此处适配。
+  - 整个 `execute`  outermost `try/except`（17-214）捕获致命错误并返回 `False`，调用方应检查返回值。
+  - 该函数原地改写字幕文件，无可撤销备份；批量处理前建议用户自行备份。
 
 ---
 
-### tools/subtitle_detect.py
-- **路径**：`backend/tools/subtitle_detect.py`
-- **规模**：37 行
-- **职责**：用 PaddleOCR 3.x 的 `TextDetection` 公开 API 检测单帧图像中的文本框（用于定位字幕区域），返回检测多边形与耗时占位值。
+### backend/tools/subtitle_detect.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/subtitle_detect.py`
+- **规模**：35 行
+- **职责**：精准模式的文本检测器。用只加载 det 模型的 `OnnxOcrRecogniser` 逐帧判定字幕头尾帧，与 OCR 共用模型与后端。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `TextDetection` 导入 | 6-9 | `try/except ImportError`，失败置 `None` |
-| `SubtitleDetect` | 12 | 文本框检测类 |
-| `__init__()` | 17-24 | 取加速单例与模型配置，构造 `TextDetection` |
-| `detect_subtitle(img)` | 26-37 | 调 `predict(img)`，返回 `(dt_polys, 0)` |
+|------|------|------|
+| `SubtitleDetect` | 9-35 | 检测类 |
+| `__init__` | 12-28 | 依据 `config` 解析 providers / device，构造 `det_only=True` 识别器 |
+| `detect_subtitle` | 30-35 | 检测文本框，返回 `(dt_boxes, elapse)` |
+
 - **调用关系**：
-  - 被 `main.py:33` 导入，`main.py:56` 创建 `self.sub_detector = SubtitleDetect()`，并在字幕区域检测流程中调用其 `detect_subtitle()`。
-  - 内部调用 `HardwareAccelerator.instance()`（18）、`PaddleModelConfig(...)`（19）、`TextDetection(**kwargs)`（24）、`text_detector.predict(img)`（32）。
-- **实现细节**：
-  - **3.x API 适配**：用 `from paddleocr import TextDetection`（7，旧版为 `PaddleOCR.ocr` 的 det 分支）；构造参数 `model_dir=model_config.DET_MODEL_PATH`，模型名非空时加 `model_name`（21-23）。
-  - `detect_subtitle()`（32-37）：`list(self.text_detector.predict(img))` 取首结果，读 `dt_polys`（36）；无结果返回 `(np.array([]), 0)`（33-34）。
-  - 返回签名沿用旧接口 `(dt_boxes, elapse)`（docstring 29-31），但 `elapse` 恒为 0（34,37）。
-- **维护与重构注意点**：
-  - `TextDetection` 导入失败时被置为 `None`（9），`__init__` 仍会调用 `None(**kwargs)`（24）导致 `TypeError`，缺少明确错误提示；应在构造时检查并抛出可读异常。
-  - `model_config.DET_MODEL_PATH` 可能为 `None`（模型未解析成功，见 paddle_model_config 注意点），传给 `TextDetection` 会在运行时失败。
-  - `elapse` 恒为 0（37）属旧接口残留，若调用方依赖耗时会得到错误数据。
-  - 每次 `SubtitleDetect()` 构造都重新加载检测模型（17-24），开销大；应复用实例或延迟加载（可参考 `OcrRecogniser` 的懒加载）。
-  - 与 `ocr.py` 都各自维护一套 PaddleOCR 3.x 结果解析（`dt_polys`），重复逻辑可抽取公共适配层。
+  - 导入 `config`（5）、`OnnxOcrRecogniser`（6）。
+  - 构造时以 `dml_device_id=device_id, det_only=True` 创建底层识别器（27-28）。
+  - 由精准模式抽帧流程调用，消费返回的 `dt_boxes`。
+
+- **实现细节**：`__init__` 中 `backend` 关闭总加速则强制 `cpu`，仅 `backend=='dml'` 时启用 DML providers，否则 CPU（13-19）；`dmlDeviceId` 转 `int`，非法值忽略（20-26）；`detect_subtitle` 调用 `self.detector.detect(img)` 并用 `np.array(..., dtype=object)` 包装返回，耗时位固定为 `0`（35）。
+
+- **维护注意点**：
+  - 返回 `np.array(..., dtype=object)` 是为兼容 `get_coordinates`（`ocr.py:102`）对框的遍历；改动返回类型会影响下游坐标提取。
+  - 与 `ocr.py::_resolve_config` 不同，此处**没有 `auto` 分支**：`ocrBackend=='auto'` 时本类走 CPU，而主 OCR 走 DML（若有设备），二者后端可能不一致；如需一致，应在此补齐 `auto` 逻辑或复用统一解析函数。
+  - `det_only=True` 意味着底层只加载 det 会话，速度快，但只能得到文本框、无法识别文字，不可用于需要文本内容的场景。
+  - `elapse` 固定返回 0，未做真实计时；调用方不应依赖该值做性能统计。
 
 ---
 
-### tools/subtitle_extractor_remote_call.py
-- **路径**：`backend/tools/subtitle_extractor_remote_call.py`
+### backend/tools/subtitle_extractor_remote_call.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/subtitle_extractor_remote_call.py`
 - **规模**：71 行
-- **职责**：定义跨进程回调协议——子进程把 `(Command, args)` 放入 `multiprocessing.Queue`，父进程的守护线程取队列并按命令分发到已注册回调，实现进度、日志、进程管理、错误与结束信号的跨进程回传。守护线程的 `run()` 使用带超时的队列读取，使 `stop()` 能及时退出。
+- **职责**：跨进程回调桥。通过 `multiprocessing.Queue` 在子进程中投递命令，主线程 daemon 轮询队列并派发到已注册的回调函数。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `Command` | 5-10 | `Enum`：`FINISH=0, PROGRESS=1, LOG=2, MANAGE_PROCESS=3, ERROR=4`（均为整数 `.value`） |
-| `SubtitleExtractorRemoteCall` | 12 | 回调桥类 |
-| `__init__()` | 16-20 | 建 `Queue`、`callbacks`、`running`，启动守护线程 `run` |
-| `run()` | 22-36 | 循环 `queue.get(block=True, timeout=0.2)`，超时捕获 `Empty` 继续，按命令分发，`FINISH` 退出 |
-| `stop()` | 38-39 | 置 `running=False` |
-| `register_*` | 41-51 | 分别注册 PROGRESS/LOG/MANAGE_PROCESS/ERROR 回调 |
-| `remote_call_update_progress()` | 53-55 | `@staticmethod`，投递 `(PROGRESS, (ocr, frame, total, finished, post,))` |
-| `remote_call_append_log()` | 57-59 | 投递 `(LOG, (*args,))` |
-| `remote_call_finish()` | 61-63 | 投递 `(FINISH, (None,))` |
-| `remote_call_catch_error()` | 65-67 | 投递 `(ERROR, (e,))` |
-| `remote_call_manage_process()` | 69-71 | 投递 `(MANAGE_PROCESS, (pid,))` |
-- **调用关系**：
-  - 被 `ui/home_interface.py:17,445` 导入并实例化；`446-453` 用四个 `register_*` 分别绑定 `progress_signal.emit`、`append_log_signal.emit`、PID 登记 lambda、`task_error_signal.emit`。
-  - 该实例的 `queue`（454-457）作为 `multiprocessing.Process(target=HomeInterface.extractor_process)` 的参数传入子进程。
-  - 子进程侧 `extractor_process`（`home_interface.py:412-431`）在 `419-425,430` 通过静态 `remote_call_*` 投递进度/日志/进程管理/错误/结束；`finally`（426-431）确保调用 finish 与 `terminate_all()`。
-- **实现细节**：
-  - **枚举值**：`Command` 成员写作 `FINISH = 0`、`PROGRESS = 1` 等（5-10），无尾随逗号，`.value` 为整数 `0..4`，可直接作为字典键与队列命令载荷。
-  - **队列命令协议**：队列元素统一为 `(cmd, args_tuple)`；`run()`（25-26）`cmd, args = self.queue.get(block=True, timeout=0.2)`；`FINISH` 直接 break（30-31），否则 `callback = self.callbacks.get(cmd)`（32），命中则 `callback(*args)`（33-34）。
-  - **可退出循环**（26-29）：`queue.get` 带 `timeout=0.2`，捕获 `multiprocessing.queues.Empty` 后 `continue`，使 `while self.running` 能周期性重新检查 `running` 标志——`stop()`（38-39）置 `False` 后守护线程可在至多约 0.2 秒内退出，不会永久阻塞在无限期 `get` 上。`finally`（35-36）无论何种退出路径都置 `running=False`。
-  - **各命令载荷**：`PROGRESS` 为 `(progress_ocr, progress_frame_extract, progress_total, isFinished, progress_post=0)` 五元组（54-55），对应 home_interface listener 签名；`LOG` 可变参数原样透传（58-59）；`FINISH` 固定 `(None,)`（62-63）忽略调用方参数；`ERROR` 为异常对象 `e`（66-67）；`MANAGE_PROCESS` 为 PID（70-71）。
-- **维护与重构注意点**：
-  - `stop()`（38-39）只置 `running=False`、不投递 `FINISH` 哨兵，退出依赖 `run()` 的超时轮询（26-29）；超时值 0.2 秒决定停止延迟，调整时需权衡响应性与空转开销。
-  - `callbacks`（18）无锁；注册与 `run()` 分发分处不同线程，动态注册存在竞态（当前仅在启动前注册，风险低）。
-  - 未注册的命令（如 `ERROR` 未 register）被静默丢弃（32-34），调试时无提示。
-  - `remote_call_finish()` 忽略参数（62-63），重复投递无害；异常对象跨进程序列化要求 `e` 可 pickle。
-  - 依赖 `multiprocessing.queues.Empty`（27）这一具体异常类；更换队列实现（如 `queue.Queue`）时需同步调整捕获类型。
+|------|------|------|
+| `Command` | 5-10 | 命令枚举：`FINISH/PROGRESS/LOG/MANAGE_PROCESS/ERROR` |
+| `SubtitleExtractorRemoteCall` | 12-71 | 远程回调类 |
+| `__init__` | 16-20 | 创建队列、回调表、`running=True`，启动 daemon 轮询线程 |
+| `run` | 22-36 | 轮询队列（超时 0.2s），按命令派发回调；`FINISH` 退出 |
+| `stop` | 38-39 | 置 `running=False` |
+| `register_update_progress_callback` | 41-42 | 注册进度回调 |
+| `register_log_callback` | 44-45 | 注册日志回调 |
+| `register_manage_process_callback` | 47-48 | 注册进程管理回调 |
+| `register_error_callback` | 50-51 | 注册错误回调 |
+| `remote_call_update_progress` | 53-55 | 静态方法：子进程投递进度 |
+| `remote_call_append_log` | 57-59 | 静态方法：子进程投递日志 |
+| `remote_call_finish` | 61-63 | 静态方法：投递 `FINISH` |
+| `remote_call_catch_error` | 65-67 | 静态方法：投递错误 |
+| `remote_call_manage_process` | 69-71 | 静态方法：投递进程管理命令（PID） |
+
+- **调用关系**：由抽帧主流程实例化并注册回调；子进程持有队列引用，通过各 `remote_call_*` 静态方法写入命令。
+- **实现细节**：`run` 用 `queue.get(block=True, timeout=0.2)`，捕获 `multiprocessing.queues.Empty` 后 `continue` 以重新检查 `running`（26-29）；命令查 `self.callbacks.get(cmd)` 后 `callback(*args)`（32-34）；`finally` 中置 `running=False`（35-36）。
+- **维护注意点**：
+  - `stop()` 仅置标志，轮询线程最多延迟 0.2s 退出；超时时间（26 行）决定停止响应速度。
+  - `FINISH` 命令通过 `break` 退出循环并触发 `finally`，不依赖 `stop()`。
+  - 各 `remote_call_*` 为静态方法，要求调用方显式传入 `queue`，与实例内队列解耦；新增命令需同时扩展 `Command`、注册方法、静态投递方法和 `run` 分派。
+  - 回调在轮询线程中同步执行，耗时回调会阻塞后续命令处理。
 
 ---
 
-### tools/subtitle_ocr.py
-- **路径**：`backend/tools/subtitle_ocr.py`
-- **规模**：302 行
-- **职责**：实现字幕 OCR 的完整流水线——在独立进程中用"生产者/消费者"两个线程，把视频帧从任务队列取出、裁剪、OCR 识别、按字幕区域过滤、写入 raw.txt，并通过进度队列向主进程上报进度；同时提供 OCR 结果调试可视化与帧预处理。
+### backend/tools/subtitle_ocr.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/subtitle_ocr.py`
+- **规模**：303 行
+- **职责**：OCR 子进程流水线。生产者读视频帧入队、消费者调用 `OcrRecogniser` 识别并按字幕区域过滤，写出原始字幕文件与丢帧调试图；提供多进程启动入口。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `extract_subtitles()` | 19-91 | 单帧 OCR 结果处理、区域过滤、写 raw 行、调试信息 |
-| `dump_debug_info()` | 94-108 | 丢字幕时的调试图片落盘 |
-| `FONT` / `paint_chinese_opencv()` | 111-122 | 模块级字体加载；用 PIL 在 OpenCV 帧上绘制中文文本 |
-| `ocr_task_consumer()` | 125-167 | 消费者线程：取帧→OCR→写 raw→上报进度 |
-| `ocr_task_producer()` | 170-217 | 生产者线程：取任务→读帧→裁剪→入 OCR 队列 |
-| `subtitle_extract_handler()` | 220-249 | 进程入口：建两个线程并 join |
-| `async_start()` | 252-276 | 创建多进程与两个队列，返回进程与队列 |
-| `frame_preprocess()` | 279-298 | 按字幕区域裁剪帧的上/下半部分 |
+|------|------|------|
+| `extract_subtitles` | 19-91 | 识别 + 字幕区域过滤 + 写入原始字幕行 |
+| `dump_debug_info` | 94-108 | 调试模式下绘制区域框与丢帧信息并保存 PNG |
+| `FONT_PATH` / `FONT` | 111-112 | 中文字体路径与 `ImageFont` 实例 |
+| `paint_chinese_opencv` | 115-122 | 用 PIL 在 OpenCV 图上绘制中文 |
+| `ocr_task_consumer` | 125-167 | 消费线程：OCR 识别、写出字幕、汇报进度 |
+| `ocr_task_producer` | 170-217 | 生产线程：按帧号读帧并入队 |
+| `subtitle_extract_handler` | 220-250 | 建 OCR 队列、启动并 join 生产/消费线程 |
+| `async_start` | 253-277 | 启动子进程，返回 `(p, task_queue, progress_queue)` |
+| `frame_preprocess` | 280-299 | 按上下半部分裁剪视频帧 |
+
 - **调用关系**：
-  - 被 `main.py:30` 导入；`main.py:1042` 调用 `subtitle_ocr.async_start(...)` 得到 `(process, task_queue, progress_queue)`，`ProcessManager.instance().add_process(process)`（1043），并向 `task_queue` 投放任务（`main.py:152,255,371,383,423,448`），主线程线程 `get_ocr_progress`（`main.py:1002-1048`）消费 `progress_queue`。
-  - 内部调用 `OcrRecogniser`/`get_coordinates`（`subtitle_ocr.py:7,29,32,136`）、`backend.tools.constant.SubtitleArea`（8-9,289,294）与 `backend.config.tr`（16,76-84）。
-  - `ocr_task_consumer` 注入加速单例（`137`）后，`OcrRecogniser.predict()` 会按 `use_dml` 自动走 DML 或 PaddleOCR 后端（见 ocr.py）。
+  - 导入 `OcrRecogniser`、`get_coordinates`（7）、`SubtitleArea` 与 `constant`（8-9）、`tr`（16）。
+  - `subtitle_extract_handler` 中 **OCR 队列容量由 `options.MAX_BATCH_SIZE` 决定**（233-235）：`max_batch = getattr(options,'MAX_BATCH_SIZE',10) if hasattr(...) else 10`，`queue.Queue(max(1,int(max_batch or 10)))`，不再硬编码 20。
+  - `async_start` 以 `SimpleNamespace(**options)` 传入子进程（274）。
+
 - **实现细节**：
-  - **生产者/消费者线程模型**（核心）：
-    - `async_start()`（252-276）：校验 `options` 必含 `REC_CHAR_TYPE`/`DROP_SCORE`/`SUB_AREA_DEVIATION_RATE`/`DEBUG_OCR_LOSS`/`HARDWARD_ACCELERATOR`（261-265）；建多进程 `Queue` 作 `task_queue`、`progress_queue`（268-270）；以 `Process(target=subtitle_extract_handler, args=(..., SimpleNamespace(**options)))` 启动独立进程（272-275），返回三元组（276）。
-    - `subtitle_extract_handler()`（220-249）：在子进程内删除旧 raw 文件（231-232）；建**有界** `ocr_queue = queue.Queue(20)`（234，容量 20 提供背压）；创建生产者线程（236-238）与消费者线程（240-242），两者均 daemon；`start`（244-246）后主线程 `join` 两线程（248-249）。
-    - `ocr_task_producer()`（170-217）：用 `cv2.VideoCapture` 打开视频（179）；循环从 `task_queue.get(block=True)` 取 6 元组 `(total_frame_count, current_frame_no, dt_box, rec_res, total_ms, default_subtitle_area)`（185）；首次建 `tqdm`（186-187）；`current_frame_no == -1` 时向 `ocr_queue` 投哨兵 `(-1, frame_count, None, None)`（191）、向 `progress_queue` 投 `(-2, frame_count)`（193）、补齐进度条并 break（195-196）；否则按 `total_ms`（`CAP_PROP_POS_MSEC`）或 `current_frame_no-1`（`CAP_PROP_POS_FRAMES`）定位（200-203），`cap.read()`（205），成功则 `frame_count++`（208）、按需 `frame_preprocess` 裁剪（210-211）、把 `(current_frame_no, frame, dt_box, rec_res)` 放入 `ocr_queue`（213）；异常 break（214-216），`cap.release()`（217）。
-    - `ocr_task_consumer()`（125-167）：创建并注入 `OcrRecogniser`（136-137）；清理旧的 `loss` 调试目录（139-142）；循环 `ocr_queue.get(block=True)` 取 4 元组（149）；`frame_no == -1` 视为哨兵，向 `progress_queue` 投 `(-1, total_tasks)` 并 return（150-154）；否则调 `extract_subtitles(...)`（156-157）、`processed_count++`、投 `(frame_no, processed_count)`（158-159）；异常投标量 `-1` 并 break（160-163）；`finally` 把累积的 `raw_subtitles` 一次性写入 `raw_subtitle_path`（164-167）。
-  - **raw.txt 行格式**（72-73,89）：`f'{str(data["i"]).zfill(8)}\t{coordinate}\t{text}\n'`——8 位零填充帧号 + `\t` + 坐标元组字符串（由 `get_coordinates` 生成的 `(xmin, xmax, ymin, ymax)`）+ `\t` + 识别文本 + 换行。
-  - **区域过滤算法**（41-87，仅当 `sub_area` 非空）：
-    - 英文语言时先用 `re.sub('[\u4e00-\u9fa5]', '', ...)` 去除中文（34-36）。
-    - 用 AABB 交集（非 Shapely，注释强调更快）：`inter_* = max/min(...)`（49-54），`has_intersection = inter_xmin<inter_xmax and inter_ymin<inter_ymax`（55）。
-    - 越界率（65）：`overflow_area_rate = ((sub_area_size + coord_area - inter_area) / sub_area_size) - 1`。
-    - 双重准入（67-71）：`overflow_area_rate <= options.SUB_AREA_DEVIATION_RATE` **且** `prob > options.DROP_SCORE` 才保留，并写 line 与 `raw_subtitles`。
-    - 丢弃原因（75-80）：越界超限→`OcrDropOutOfBoxRate`、置信度低→`OcrDropConfidentLow`、无交集→`OcrDropNoIntercetion`（源码拼写）；经 `tqdm.write` 输出（82-84）；每条构造 `loss_info(text, prob, overflow_area_rate, coordinate, selected)` 具名元组供调试（86-87）。
-    - 无 `sub_area` 时直接追加 raw 行（88-89）。
-  - **进度协议**（消费者 153/159/162，生产者 193；主进程消费见 `main.py:1002-1048`）：`(-2, frame_count)` 提前告知总帧数；`(frame_no, processed_count)` 每帧上报；`(-1, total_tasks)` 识别完成；标量 `-1` 为异常分支。
-  - **调试可视化**（94-108,111-122）：仅当 `DEBUG_OCR_LOSS` 且语言属于 `('ch','japan ','korea','ch_tra')`（96，注意 `japan ` 带尾空格、`korea` 拼写）且该行有内容却无中文字符时触发（97）；画字幕区域蓝框（101），按 `selected` 用绿/红标注每个候选（103-107），写 `{帧号:08d}.png`（108）；字体 `NotoSansCJK-Bold.otf`（111-112）在模块导入时加载。
-  - **帧预处理**（279-298）：`LOWER_PART` 取下半帧 `frame[cropped:]`（289-292），`UPPER_PART` 取上半帧 `frame[:cropped]`（294-297）；更高分辨率缩放逻辑被注释（283-287），属死代码。
-- **维护与重构注意点**：
-  - **模块导入期风险**：`FONT = ImageFont.truetype(FONT_PATH, 20)`（112）在 import 时执行，字体文件 `backend/tools/NotoSansCJK-Bold.otf` 缺失会直接导致整个模块导入失败。
-  - **语言拼写错误**：`dump_debug_info` 的 `('ch','japan ','korea','ch_tra')`（96）中 `'japan '` 带尾空格、`'korea'` 非标准（应为 `japan`/`korean`），导致日文/韩文调试分支可能永不触发；与主配置语言值（见 paddle_model_config）不一致。
-  - **进度竞态**：生产者先投哨兵 `(-1, frame_count, None, None)`（191）再投 `(-2, frame_count)`（193），消费者可能先处理完帧并投 `(-1, total)`；主进程收到任一 `-1` 即 return，边界情况下 `total_tasks` 可能未被设置。
-  - 消费者异常时投标量 `-1`（162）会被主进程当作"正常完成"置 100%，错误被掩盖。
-  - `frame_count`（生产者实际成功读取帧数，208）可能与 `current_frame_no` 不一致（VSF 跳帧/定位失败），行首帧号用 `data['i']=frame_no`（155），切勿当作连续帧序号。
-  - `options.HARDWARD_ACCELERATOR`（259-265,137）为历史拼写（Hardware→Hardward），与配置字段保持一致，重构需全链路同步。
-  - `extract_subtitles` 同时把行写入局部 `line`（72）与 `raw_subtitles`（73），`line` 仅用于调试判定（97）；`raw_subtitles` 全量驻留内存，超长视频内存压力较大。
-  - 生产者/消费者的异常分支仅 `print(e)`（161,215）并 break/return，缺少结构化日志与错误回传通道（与 `subtitle_extractor_remote_call` 的 ERROR 命令未打通）。
+  - `extract_subtitles`：外部已给 `dt_box/rec_res` 则复用，否则调用 `text_recogniser.predict(img)`（28-29）；英文模式去除中文字符（34-38）；用 AABB 交集判定字幕区域归属并计算越界率 `overflow_area_rate`（48-65），低于阈值且置信度高于 `DROP_SCORE` 才保留（67-73），否则记录丢弃原因并输出（74-84）。
+  - `ocr_task_consumer`：以 `frame_no == -1` 为结束标志，收到后向 `progress_queue` 投递 `(-1, total_tasks)` 并退出（149-154）；`finally` 中把 `raw_subtitles` 写入文件（164-167）。
+  - `ocr_task_producer`：`current_frame_no == -1` 时投递结束标志 `(-1, frame_count, None, None)` 及 `(-2, frame_count)`（189-193）；依据 `total_ms` 是否存在选择按毫秒或帧号 seek（200-203）；按 `default_subtitle_area` 裁剪帧（210-211）。
+  - `frame_preprocess`：仅裁剪上半/下半部分，未处理 `UNKNOWN`（289-298）。
+
+- **维护注意点**：
+  - 队列容量为配置项驱动：`MAX_BATCH_SIZE` 缺失或非整数时回退 10，并夹到 ≥1；调整该配置值直接改变生产者/消费者的缓冲深度，需结合内存与实时性评估。
+  - `async_start` 用 `assert` 校验 `options` 必含 `REC_CHAR_TYPE`、`DROP_SCORE`、`SUB_AREA_DEVIATION_RATE`、`DEBUG_OCR_LOSS`、`HARDWARD_ACCELERATOR`（262-266）；注意 `HARDWARD_ACCELERATOR` 拼写保留。
+  - `extract_subtitles` 依赖 `get_coordinates` 返回的 `(xmin,xmax,ymin,ymax)` 与 `rec_res` 一一对应；两者数量不一致时 `zip` 会静默丢数据。
+  - 进度消息有多种语义：`(-2, n)` 通知总帧数、`(-1, n)` 结束、`(frame_no, processed_count)` 常规进度、裸 `-1` 异常；消费方需按首元素类型区分。
+  - `frame_preprocess` 中保留的注释块（283-288）提到"paddlepaddle 压缩 640×640"，与实际 ONNX 后端无关；相关缩放逻辑已注释，当前仅做上下半部分裁剪。
+  - `FONT` 在模块加载时即以固定 20 号创建（112），依赖 `NotoSansCJK-Bold.otf` 与源码同目录；字体缺失会导致导入失败。
 
 ---
 
-### tools/theme_listener.py
-- **路径**：`backend/tools/theme_listener.py`
+### backend/tools/theme_listener.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/theme_listener.py`
 - **规模**：26 行
-- **职责**：在后台线程监听操作系统明暗主题变化，自动切换 qfluentwidgets 主题并发出 `systemThemeChanged` 信号，使界面跟随系统主题。
+- **职责**：系统主题监听器。后台线程监听操作系统深色/浅色切换，驱动 qfluentwidgets 主题更新并发信号。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `SystemThemeListener` | 7 | 继承 `QtCore.QThread` 的主题监听线程 |
+|------|------|------|
+| `SystemThemeListener` | 7-26 | 继承 `QtCore.QThread` 的监听线程 |
 | `systemThemeChanged` | 10 | `QtCore.Signal()`，主题变化信号 |
-| `__init__(parent=None)` | 12-13 | 调用父类构造 |
-| `run()` | 15-16 | 调 `darkdetect.listener(self._onThemeChanged)` 进入阻塞监听 |
-| `_onThemeChanged(theme)` | 18-26 | 映射 dark/light 到 `Theme`，`setTheme`，更新 `qconfig` 并发信号 |
+| `__init__` | 12-13 | 调用父类构造 |
+| `run` | 15-16 | 调用 `darkdetect.listener(self._onThemeChanged)` 阻塞监听 |
+| `_onThemeChanged` | 18-26 | 映射 `Theme.DARK/LIGHT`，`setTheme` 并在 AUTO 模式下更新配置与发信号 |
+
 - **调用关系**：
-  - 被 `gui.py:26` 导入；`gui.py:43` 处 `self.themeListener = SystemThemeListener(self)` 被注释，当前未启用。
-  - 内部依赖 `qfluentwidgets`（`setTheme`/`qconfig`/`Theme`）、`darkdetect`、`PySide6`。
-- **实现细节**：
-  - `run()`（15-16）用 `darkdetect.listener(...)` 注册回调，该调用为阻塞式；`_onThemeChanged`（18-26）先把 `"dark"`（忽略大小写）映射为 `Theme.DARK`，否则 `Theme.LIGHT`（19），调 `setTheme(theme)`（20）；若 `qconfig.themeMode != Theme.AUTO` 或主题未变则提前 return（21-22）；否则设 `qconfig.theme = Theme.AUTO`（24）、触发 `_cfg.themeChanged.emit(Theme.AUTO)`（25）、再发自定义信号 `systemThemeChanged`（26）。
-- **维护与重构注意点**：
-  - `gui.py:43` 实例化被注释，功能当前未启用；若要启用需确认 `darkdetect.listener` 在各平台的可用性与生命周期。
-  - `run()` 内无异常处理（15-16），`darkdetect.listener` 抛异常会导致线程静默终止且无通知。
-  - 无停止机制：`darkdetect.listener` 为阻塞监听，没有对应的取消接口，`QThread` 退出时可能残留监听线程。
-  - 主题判断为二元（非 dark 即 light，19），`darkdetect` 返回其他值会被当作 light。
+  - 导入 PySide6 的 `QtCore/QtWidgets/QtGui`（1）、qfluentwidgets 的 `setTheme/qconfig/Theme`（3）、`darkdetect`（4）。
+  - `gui.py` 中相关实例化/启动代码处于注释状态，当前主题跟随逻辑未实际启用。
+
+- **实现细节**：`_onThemeChanged` 把字符串 'dark' 映射为 `Theme.DARK`、其余为 `Theme.LIGHT`（19）；若 `qconfig.themeMode.value != Theme.AUTO` 或主题未变则直接返回（21-22）；AUTO 模式下写 `qconfig.theme`、`emit` 配置变更信号与本类信号（24-26）。
+
+- **维护注意点**：
+  - 当前 `gui.py` 未启用该监听器（实例化/启动/退出清理均已注释），不要误判主题会自动跟随；如启用需保证退出时线程能安全终止。
+  - `run` 依赖 `darkdetect.listener` 的回调线程模型，回调 `_onThemeChanged` 不在 Qt 主线程；其中对 `qconfig` 与信号的直接操作需评估线程安全。
+  - 第 1 行 `QtWidgets`、`QtGui` 导入但文件内未使用，属冗余，可在重构时清理。
 
 ---
 
-### tools/version_service.py
-- **路径**：`backend/tools/version_service.py`
+### backend/tools/version_service.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/version_service.py`
 - **规模**：84 行
-- **职责**：请求更新接口获取最新版本号，与当前版本比较判断是否有新版本，并探测系统 HTTP 代理以支持代理网络环境。
+- **职责**：版本检查服务。请求多个更新 API 端点获取最新版本号，与当前版本比较，并处理系统代理。
 - **关键类/函数**：
+
 | 名称 | 行号 | 说明 |
-|---|---|---|
-| `VersionService` | 12 | 版本服务类 |
-| `__init__()` | 15-19 | 初始化当前/最新版本、版本正则、API 端点列表 |
-| `get_latest_version()` | 21-53 | 依次请求端点，解析 `tag_name`，返回最新版本号 |
-| `has_new_version()` | 55-59 | 用 `QVersionNumber` 比较版本大小 |
-| `get_system_proxy()` | 61-84 | 按平台读取系统代理设置 |
+|------|------|------|
+| `VersionService` | 12-84 | 版本服务类 |
+| `__init__` | 15-19 | 初始化当前/最新版本、版本正则、API 端点 |
+| `get_latest_version` | 21-53 | 依次请求端点，解析 `tag_name`，返回最新版本号 |
+| `has_new_version` | 55-59 | 用 `QVersionNumber` 比较最新版本与当前版本 |
+| `get_system_proxy` | 61-84 | 探测 Windows / macOS / 环境变量代理 |
+
 - **调用关系**：
-  - 被 `ui/advanced_setting_interface.py:14,24` 导入并实例化 `self.version_manager = VersionService()`；后续调用 `get_latest_version()`/`has_new_version()`。
-  - 内部依赖 `backend.config` 的 `VERSION`（`config.py:10`）、`PROJECT_UPDATE_URLS`（`config.py:14-17`，GitHub API 与加速镜像两个端点）、`tr`；以及 `requests`、`PySide6.QtCore.QVersionNumber`。
-- **实现细节**：
-  - `__init__()`（15-19）：`current_version = lastest_version = VERSION`；`version_pattern = re.compile(r'v*((\d+)\.(\d+)\.(\d+))')`（18，匹配可选 `v` 前缀 + 三段数字）；`api_endpoints = PROJECT_UPDATE_URLS`。
-  - `get_latest_version()`（21-53）：构造伪装 Chrome 的 `User-Agent`（23-25）；通过 `get_system_proxy()` 取代理并组装 `proxies`（27-31）；遍历端点（34），每次 `requests.get(url, headers, timeout=5, allow_redirects=True, proxies=proxies)` + `raise_for_status()`（36-37）；解析 `response.json()['tag_name']`（40），正则 `search`（41），不匹配则继续下一个端点（42-43）；命中取 `match.group(1)`（纯数字版本，45），打印 `VersionInfo`（46）并返回；异常打印 `RequestError` 并继续（48-50）；全部失败返回 `VERSION`（53）。
-  - `has_new_version()`（55-59）：`QVersionNumber.fromString(get_latest_version()) > QVersionNumber.fromString(current_version)`。
-  - `get_system_proxy()`（61-84）：Windows 读注册表 `HKCU\...\Internet Settings`（67），`ProxyEnable` 为真则取 `ProxyServer`（68-72）；macOS 用 `scutil --proxy` 解析，支持 HTTP 代理与 PAC 自动配置（75-82）；其他平台回退环境变量 `http_proxy`（84）。Windows 分支用 `enabled, _ = winreg.QueryValueEx(key, 'ProxyEnable')`（68）与 `proxy_server, _ = winreg.QueryValueEx(key, 'ProxyServer')`（71）正确解包 `(value, type)` 二元祖，仅取 value 使用（72），避免把元组拼进 URL。
-- **维护与重构注意点**：
-  - 拼写：`lastest_version`（17,45,47）应为 `latest_version`，属遗留命名。
-  - `v*` 正则贪婪匹配（18）对 `vv1.2.3` 等异常 tag 容错一般；`match.group(1)` 取纯数字版本，符合 `QVersionNumber` 要求。
-  - 版本端点硬编码于 `config.py`（两个），单点失败会顺序重试（34-50），但无缓存，每次 `has_new_version` 都发网络请求。
-  - `get_system_proxy` 的 macOS 分支用 `os.popen`（76），存在命令注入面（参数固定，风险低）；PAC 场景直接把 PAC URL 当代理地址（81-82），可能导致 `requests` 代理配置异常。
-  - `get_system_proxy` 的 Windows 分支全程包在裸 `except`（73-74）中，注册表键缺失或取值失败都静默回退到环境变量，排查代理问题时缺乏日志。
-  - 网络异常、JSON 结构变化（`tag_name` 缺失）仅靠 print（49），UI 层无法区分"无新版本"与"检查失败"。
+  - 导入 `requests`、`QVersionNumber`，`backend.config` 的 `VERSION / PROJECT_UPDATE_URLS / tr`（9）。
+  - UI 层（设置页）调用 `has_new_version()` 或 `get_latest_version()` 触发更新检查。
+
+- **实现细节**：`get_latest_version` 带浏览器 UA（23-25），用 `get_system_proxy()` 构造 `proxies`（27-31），遍历 `api_endpoints`（34），`requests.get(timeout=5, allow_redirects=True)` 后取 `response.json()['tag_name']`（36-40），正则 `v*((\d+)\.(\d+)\.(\d+))` 匹配（18、41），失败则尝试下一个端点，全部失败返回 `VERSION`（53）。`get_system_proxy` 在 Windows 读注册表 `Internet Settings`，macOS 解析 `scutil --proxy`，兜底读 `http_proxy` 环境变量（61-84）。
+
+- **维护注意点**：
+  - 响应 JSON 必须含 `tag_name` 且能被正则匹配（形如 `v1.2.3`）；端点改字段需同步这里。
+  - 全部端点失败时静默返回当前版本，`has_new_version()` 会是 `False`；如需区分"无更新"与"检查失败"，当前接口无法表达。
+  - `has_new_version` 依赖 `QVersionNumber.fromString`，版本字符串需标准 `x.y.z` 格式。
+  - `get_system_proxy` 中 Windows 分支 `ProxyEnable` 为真且 `ProxyServer` 无 scheme 时补 `http://`（71-72）；macOS 分支中 `ProxyAutoConfigURLString` 变量未定义即被返回（82 行），若走该 PAC 代理分支会触发 `NameError`，属现存隐患，维护时应修正。
+  - `requests.get` 在各端点间无退避，端点多时可能串行阻塞；调用方宜放到后台线程。
 
 ## 四、并发工具框架 backend/tools/concurrent/
 
@@ -2027,343 +1928,265 @@ flowchart TD
 
 ## 六、UI 界面层 ui/
 
-本节覆盖 `ui/` 根目录下（不含 `component/` 子目录）的 5 个文件。整个界面是"三页"结构：`gui.py:78-88` 用 `addSubInterface` 依次挂载 `HomeInterface`（主页，图标 HOME）、`TimelineSyncInterface`（时间轴同步，图标 FONT）、`AdvancedSettingInterface`（高级设置，图标 SETTING，置于 `NavigationItemPosition.BOTTOM`）；其中 `SettingInterface` 不是独立页面，而是作为 `QVBoxLayout` 嵌入主页（`home_interface.py:94-96`），承载六个常用设置。三页职责：主页负责"打开视频→框选字幕区→设置参数→批量提取→进度/日志→输出"，高级设置页集中暴露所有高级/开发/关于配置项并提供版本更新检查，时间轴同步页通过 `sushi` 外部命令把源字幕同步到目标视频。`gui.py:61` 的定时器连接 `advancedSettingInterface.check_update(ignore=True)`，即启动时的静默更新检查也由高级设置页负责。
+本分片描述 `ui/` 根目录下 5 个文件的**当前磁盘最终状态**，面向维护/重构，仅陈述最终实现，不含变更历史。其中 `SettingInterface` 不是独立页面，而是作为 `QVBoxLayout` 嵌入主页面右侧（`home_interface.py:94-96`）；`AdvancedSettingInterface`、`TimelineSyncInterface`、`HomeInterface` 三者由 `gui.py` 挂载为独立导航页。
 
 ---
 
-### ui/home_interface.py
+### 1. ui/home_interface.py
 
 - **路径**：`D:/VSCode/video-subtitle-extractor-main/ui/home_interface.py`
 - **规模**：630 行
-- **职责**：应用主页面。左侧为视频预览组件 + 输出日志框，右侧为常用设置布局 + 任务列表 + 操作按钮（打开/运行/停止）。负责把用户框选、任务参数组装成 `options`，以**独立子进程**方式调用 `backend.main.SubtitleExtractor`，并通过 `multiprocessing.Queue` + `Signal` 把子进程进度、日志、错误回传主线程更新 UI。
+- **职责**：应用主页。左侧为视频预览组件 + 只读日志框；右侧嵌入 `SettingInterface`（常用设置）、任务列表 `TaskListComponent`、打开/运行/停止按钮。把用户框选区域与任务参数组装为 `options`，以**独立子进程**方式调用 `backend.main.SubtitleExtractor`，通过 `multiprocessing.Queue` + Qt `Signal` 把子进程的进度/日志/错误回传主线程刷新 UI。支持批量队列、停止/终止子进程、进度防回退、日志按类型着色。
 
 - **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
 |---|---|---|
-| `HomeInterface` | 20 | 主页类，继承 `QWidget` |
-| `progress_signal` | 21 | `Signal(int, int, int, bool, int)`，跨线程回传进度（OCR/帧提取/总数/完成标志/后处理） |
-| `append_log_signal` | 22 | `Signal(list)`，回传日志（可变参数被打包成 list） |
-| `task_error_signal` | 23 | `Signal(object)`，回传子进程异常对象 |
-| `__init__` | 24-49 | 初始化视频状态变量（28-34）、滚动/运行标志（37-40）、当前任务索引（43），构建 UI（45）并连接 3 个自定义信号（46-48），打印加速器警告（49） |
-| `__init_widgets` | 51-136 | 主布局：左侧视频组件（62-65）+ 输出框（73-85）；右侧设置容器（94-96）+ 任务列表容器（99-108）+ 三按钮容器（111-134） |
-| `on_scroll_change` | 138-146 | 监控日志滚动条：滚到底部开自动滚动，向上滚动则关闭 |
-| `slider_changed` | 149-156 | 滑块变化→`cv2.CAP_PROP_POS_FRAMES` 定位帧→`update_preview` |
-| `ab_sections_changed` | 158-162 | 视频组件 AB 分区变化→写回当前任务的 `TaskOptions.AB_SECTIONS` |
-| `selections_changed` | 164-168 | 视频组件选区变化→写回当前任务的 `TaskOptions.SUB_AREAS` |
-| `on_task_selected` | 170-181 | 选中任务：加载视频、恢复 AB 分区、`apply_task_selection` |
-| `apply_task_selection` | 183-205 | 选区三级回退：任务自带→其他任务已设选区（192-198）→配置文件 `load_selections_from_config`（200-201）；最终 `set_selection_rects` 并写回（203-204） |
-| `on_task_deleted` | 208-221 | 删除正在处理的任务则重置 `current_processing_task_index`（215-216），并选中第一个任务（218-221） |
-| `update_preview` | 223-238 | 缩放帧、把视频参数（宽高/边框/fps）下发给显示组件、刷新画面 |
-| `_img_resize` | 240-289 | 等比缩放 + 黑边填充，并按比例保存 `border_*`/`scaled_*` 用于选区坐标反算（279-287） |
-| `stop_button_clicked` | 291-306 | 置 `running_task=False`，按 PID/进程对象终止子进程（294-298），当前任务回退 `PENDING`（300-301），恢复按钮（305-306） |
-| `run_button_clicked` | 308-401 | 批量运行主入口：校验待办任务（309-311）、切换按钮（319-320）、启动后台 `threading.Thread`（322、395 启动）逐任务处理 |
-| `extractor_process` | 403-432 | **静态方法，子进程入口**。创建 `SubtitleExtractor`，动态注入 options，monkey-patch 三个回调，运行，异常回传，finally 收尾 |
-| `run_subtitle_extractor_process` | 436-469 | 注册 4 类回调→建 `multiprocessing.Process`→start/add_process/join→finally stop caller |
-| `processing_finished` | 471-484 | `@Slot()`；无待办时恢复界面、`se=None`、滑块归 1、索引重置 |
-| `update_progress` | 486-513 | `@Slot(int, bool)`；按进度定位视频帧、计算加权任务进度、防回退、`isFinished` 触发收尾 |
-| `append_log` | 515-517 | `@Slot(list)`；解包后转调 `append_output` |
-| `append_output` | 519-550 | 按关键字给日志上色（526-540）、插入文本（543-545）、按 `auto_scroll` 自动滚动（548-550） |
-| `on_task_error` | 552-556 | `@Slot(object)`；输出错误日志并把当前任务标记 `FAILED` |
-| `load_video` | 558-582 | `cv2.VideoCapture` 打开、读帧率/帧数/尺寸、刷新预览、设置滑块上限、启用拖拽 |
-| `open_file` | 585-608 | 多选文件对话框→倒序加载→正序加入任务列表→`files_loaded` 为空守卫→选中最后一项 |
-| `closeEvent` | 610-629 | 断开所有信号、释放视频资源、`ProcessManager.terminate_all()` |
+| `HomeInterface` | 20 | 主页面 `QWidget`，持有视频参数、任务状态、子进程句柄 |
+| 类信号 `progress_signal / append_log_signal / task_error_signal` | 21-23 | 分别 `(int,int,int,bool,int)`、`(list)`、`(object)`，跨线程回传子进程数据 |
+| `__init__` | 24-49 | 初始化状态变量（video_path/cap/fps/frame_count、auto_scroll、running_task、running_process、running_sub_process_pids、current_processing_task_index=-1），建 UI 并连接三个类信号 |
+| `__init_widgets` | 51-136 | 搭建左右布局：视频组件、日志框、设置容器、任务列表、按钮容器 |
+| `on_scroll_change` | 138-146 | 日志滚动条到底时开启 auto_scroll，用户上滑则关闭 |
+| `slider_changed` | 149-156 | 滑块变动时用 cv2 定位帧并刷新预览 |
+| `ab_sections_changed` / `selections_changed` | 158-168 | 把 AB 段 / 字幕选区写回当前任务 option；当前索引为 -1 时直接返回 |
+| `on_task_selected` | 170-181 | 选中任务：加载视频预览、恢复 AB 段、应用选区 |
+| `apply_task_selection` | 183-205 | 选区优先级：本任务 → 其他任务已有选区 → 配置文件；回写并展示 |
+| `on_task_deleted` | 208-221 | 删除正在处理的任务时把 current_processing_task_index 归 -1，并选中首个任务 |
+| `update_preview` / `_img_resize` | 223-289 | 等比缩放 + 黑边填充到预览尺寸，记录边框/缩放比例用于坐标换算 |
+| `stop_button_clicked` | 291-306 | 置 running_task=False，按 PID/进程终止子进程，恢复当前任务为 PENDING，finally 复位按钮 |
+| `run_button_clicked` | 308-401 | 启动后台守护线程 `task()` 逐个处理待办任务；无待办时提示并 return |
+| `task`（内部函数） | 322-393 | 批量主循环：取任务→加载视频→应用选区→组装 options→起子进程→按退出码标记完成/失败 |
+| `extractor_process`（`@staticmethod`） | 403-432 | 子进程入口：实例化 SubtitleExtractor，注入 options 与进度/日志/进程/错误回调，运行后 finish 并 terminate_all |
+| `run_subtitle_extractor_process` | 436-469 | 创建 `SubtitleExtractorRemoteCall`，注册 4 类回调，`multiprocessing.Process` 启动并 `join()`，finally stop |
+| `processing_finished` | 471-484 | 队列清空后恢复按钮、重置滑块与任务索引 |
+| `update_progress` | 486-513 | 加权进度（OCR 90% + 帧提取 5% + 后处理 5%）、按任务防回退、驱动滑块与任务进度 |
+| `append_log` | 515-517 | `@Slot(list)`，把子进程日志转发 `append_output` |
+| `append_output` | 519-550 | 按关键字着色（完成/处理中/警告/错误等）写入日志框并控制自动滚动 |
+| `on_task_error` | 552-556 | `@Slot(object)`，输出错误并把当前任务标为 FAILED |
+| `load_video` | 558-582 | cv2 打开视频、读取帧/尺寸/fps、刷新预览、设置滑块范围 |
+| `open_file` | 585-608 | 文件对话框批量选择，倒序加载视频、正序加入任务列表 |
+| `closeEvent` | 610-629 | 断开所有手动连接的信号、释放 video_cap、`terminate_all()` |
 
-- **信号与槽**（逐条，含行号）：
+- **信号与槽**：
+  - 类信号连接（`__init__` 46-48）：`progress_signal→update_progress`、`append_log_signal→append_log`、`task_error_signal→on_task_error`。
+  - 组件信号（`__init_widgets`）：`video_display_component.ab_sections_changed→ab_sections_changed`（63）、`selections_changed→selections_changed`（64）、`video_slider.valueChanged→slider_changed`（70）、`output_text` 滚动条 `valueChanged→on_scroll_change`（78）、`task_list_component.task_selected→on_task_selected`（104）、`task_deleted→on_task_deleted`（105）、`file_button.clicked→open_file`（118）、`run_button.clicked→run_button_clicked`（123）、`stop_button.clicked→stop_button_clicked`（129）。
+  - 断开：`closeEvent` 614-619 逐一 `disconnect`，防止重复连接/关闭期回调。
 
-自定义 Signal 定义与连接：
-- `progress_signal = Signal(int, int, int, bool, int)`（21）→ `connect(self.update_progress)`（46）；发射点：`run_subtitle_extractor_process` 注册为回调（447）、完成处（370）
-- `append_log_signal = Signal(list)`（22）→ `connect(self.append_log)`（47）；发射点：注册回调（448）
-- `task_error_signal = Signal(object)`（23）→ `connect(self.on_task_error)`（48）；发射点：注册回调（454）
-
-组件/控件信号连接：
-- `video_display_component.ab_sections_changed` → `self.ab_sections_changed`（63）
-- `video_display_component.selections_changed` → `self.selections_changed`（64）
-- `video_slider.valueChanged` → `self.slider_changed`（70）
-- `output_text.verticalScrollBar().valueChanged` → `self.on_scroll_change`（78）
-- `task_list_component.task_selected` → `self.on_task_selected`（104）
-- `task_list_component.task_deleted` → `self.on_task_deleted`（105）
-- `file_button.clicked` → `self.open_file`（118）
-- `run_button.clicked` → `self.run_button_clicked`（123）
-- `stop_button.clicked` → `self.stop_button_clicked`（129）
-
-关闭时断开（614-619）：`progress_signal`/`append_log_signal`/`task_error_signal` 三个 disconnect（614-616），`video_slider.valueChanged`、`ab_sections_changed`、`selections_changed` 三个 disconnect（617-619）。
-
-Slot 装饰器：`processing_finished`（471，无参数）、`update_progress`（486，标注 `@Slot(int, bool)`）、`append_log`（515，`@Slot(list)`）、`on_task_error`（552，`@Slot(object)`）。
-
-- **实现细节**（用户主路径，逐步）：
-
-1. **打开视频**（`open_file` 585-608）：`QFileDialog.getOpenFileNames` 过滤 mp4/flv/wmv/avi（586-591）；**倒序**逐个 `load_video`（595）以便第一个视频画面最终显示在屏幕；成功者收集到 `files_loaded`（598），再**正序** `task_list_component.add_task`（602-604）保证列表与加载顺序一致；随后 `if not files_loaded: return`（605-606）——当没有任何文件成功加载时直接返回，避免用未成功加载的路径继续执行；最后按 `path` 找到索引并 `select_task`（607-608）。`load_video`（558-582）用 `cv2.VideoCapture` 打开（563），读取 FPS/帧数/宽高（569-572），`update_preview(574)`，`video_slider.setMaximum(frame_count)` 并置 1（575-576），启用拖拽（577）。
-
-2. **框选字幕区**：`VideoDisplayComponent` 的 AB 分区/选区变化信号（63-64）经 `ab_sections_changed`（158-162）/`selections_changed`（164-168）写回当前任务的 `TaskOptions.AB_SECTIONS`/`SUB_AREAS`。选中任务时 `on_task_selected`（170-181）加载视频并恢复 AB 分区。`apply_task_selection`（183-205）按"任务自带选区 → 遍历其他任务复用已设选区（192-198）→ 从配置文件 `load_selections_from_config`（201）"三级回退，最后 `set_selection_rects` 并写回任务（203-204）。
-
-3. **参数**：右侧 `settings_container.setLayout(SettingInterface(...))`（94-96）嵌入六个常用设置；每帧任务的 `options` 来自 `task_list_component`（355-361），其中 `SUB_AREAS` 必须经 `preview_coordinates_to_video_coordinates` 把预览坐标反算为视频原始坐标，并只取第一个区域（359-360）；提取前 `save_selections_to_config()`（346）持久化。
-
-4. **批量运行**（`run_button_clicked` 308-401）：先校验 `get_pending_tasks()`（309、315），隐藏运行/显示停止按钮（319-320），起 daemon 线程执行闭包 `task()`（322，395 启动）。线程内 `while self.running_task` 循环（325）：取 `pending_tasks[0]`（331）→ 设 `current_processing_task_index`（333）→ `load_video` 失败则 `FAILED` 并 `continue`（334-337）→ `apply_task_selection` 无选区则 `FAILED` 并 `continue`（340-344）→ 保存选区（346）、进度归零（349）、选中任务（352）、置 `PROCESSING`（354）→ 组装 options（355-361）→ 调用 `run_subtitle_extractor_process`（365）→ 依据 `process.exitcode == 0` 且状态仍为 `PROCESSING` 判定 `COMPLETED`（369-373），否则 `FAILED`（375）。`except`（377-384）打印异常、输出 `Error: ...`、把当前任务标记 `FAILED` 后**`continue`**，跳过该任务继续处理队列（与 334-344 的显式失败分支行为一致）；`finally`（385-389）释放 `video_cap` 并 `time.sleep(1)`；外层 `finally`（390-393）置 `running_task=False` 并恢复按钮。最外层 `try/except`（313-401）兜底异常时打印 `traceback.format_exc()` 并恢复按钮（396-401）。
-
-5. **进度与日志**：子进程在 `extractor_process`（403-432）中运行；父进程 `run_subtitle_extractor_process`（436-469）创建 `SubtitleExtractorRemoteCall`（446），注册进度/日志/进程管理/错误四类回调（447-454）——其中管理回调把 PID 同时加入 `ProcessManager` 与 `running_sub_process_pids`（449-453）；随后 `multiprocessing.Process(target=HomeInterface.extractor_process, args=(queue, ...))`（455-458），`start()`（462）、`add_process`（463）、`join()` 阻塞等待（465）、`finally` 调 `stop()`（468）。子进程通过 `queue.put((Command, args))` 把消息推回，caller 的守护线程 `run()` 分发到已注册回调（`subtitle_extractor_remote_call.py:22-32`），最终触发 Qt 信号回到主线程：`update_progress`（486-513）用进度反算滑块帧位（489-491），按"帧提取 5% + OCR 90% + 后处理 5%"计算展示进度（494-495），用 `_last_task_progress` 字典防回退（497-506），`isFinished` 触发 `processing_finished`（509-510）；`append_log`（515）→`append_output`（519-550）按关键字给日志上色并自动滚动；`on_task_error`（552-556）输出错误并标记失败。
-
-6. **输出与停止**：输出统一走 `append_output`（519-550），颜色映射见 526-540（完成/结束绿、处理中蓝、警告橙、错误红等）；完成判定与按钮恢复在 `processing_finished`（471-484）。停止时 `stop_button_clicked`（291-306）置 `running_task=False`、按 PID 与进程对象双重终止（294-298）、当前任务回退 `PENDING`（300-301）。
-
-**子进程 `extractor_process` 的 monkey-patch 细节**（403-432）：
-- 延迟导入 `from backend.main import SubtitleExtractor` 并实例化（415-416），设置 `subtitle_output_path`（417）。
-- 用 `setattr(sr, key, options[key])` 把界面选项**动态注入**为实例属性（418-419），不经过显式参数列表——后端新增选项无需改这里，但拼错 key 不会报错。
-- 替换三个方法为队列转发 lambda：`sr.add_progress_listener(...)` 把进度监听 redirect 到 `remote_call_update_progress`（420）；`sr.append_output = lambda *args: ...remote_call_append_log(queue, args)`（421）；`sr.manage_process = lambda pid: ...remote_call_manage_process(queue, pid)`（422）。随后 `sr.run()`（423）。
-- `except` 里 `traceback.print_exc()` 并 `remote_call_catch_error(queue, e)`（424-426）；`finally` 把 `sr.isFinished=True`、`sr.vsf_running=False`（428-430），`remote_call_finish(queue)` 投递 `FINISH` 结束 caller 线程（431），并调用 `ProcessManager.instance().terminate_all()`（432）。
+- **实现细节**：
+  - **批量队列不中断**：`task()` 循环内，`load_video` 失败（334-337）、选区为空（341-344）、处理异常（377-384）三种情况均 `update_task_status(..., FAILED)` 后 **`continue`**；仅当 `get_pending_tasks()` 为空（328-330）才 `break`。注释（383）明确"单个任务失败不应终止整个批量队列"。
+  - **options 组装**：遍历 `task.options`，其中 `SUB_AREAS` 经 `preview_coordinates_to_video_coordinates` 换算并取首项（356-361）；每轮把 `task.output_path` 置 None 后由后端决定（362-364）。
+  - **remote_call 子进程通信**：子进程侧 `extractor_process` 通过 `SubtitleExtractorRemoteCall.remote_call_update_progress / remote_call_append_log / remote_call_manage_process / remote_call_catch_error / remote_call_finish`（420-426、431）把数据写入 queue；父进程侧 `run_subtitle_extractor_process` 注册回调（446-454）把 queue 数据转成 `progress_signal.emit / append_log_signal.emit / task_error_signal.emit`及 PID 记账，实现跨进程/跨线程通信。
+  - **进度健壮性**：`update_progress` 用 `_last_task_progress[task_idx]` 防止进度回退，`isFinished` 时允许覆盖；整体 try/except 防止进度回调崩溃主界面（511-513）。
+  - **open_file 空防护**：`if files:`（592）避免空选择进入处理；循环结束 `if not files_loaded: return`（605-606）保证全部加载失败时不执行后续 `find_task_index_by_path`/`select_task`。
+  - `update_progress` 装饰写为 `@Slot(int, bool)`（486）但方法实际接收 5 个参数，与 `progress_signal` 的 5 参数签名一致，Sil 槽标注与实际不符。
 
 - **调用关系**：
-  - backend 模块：`backend.config`（`config`, `tr`，16）；`backend.tools.subtitle_extractor_remote_call.SubtitleExtractorRemoteCall`（17）；`backend.tools.process_manager.ProcessManager`（18）；`backend.main.SubtitleExtractor`（子进程内延迟导入，415）。
-  - component 组件：`ui.component.video_display_component.VideoDisplayComponent`（13，信号见 63-64；方法 `set_ab_sections`/`set_selection_rects`/`load_selections_from_config`/`save_selections_to_config`/`preview_coordinates_to_video_coordinates`/`set_dragger_enabled`/`set_video_parameters`/`update_video_display`）；`ui.component.task_list_component.TaskListComponent`、`TaskStatus`、`TaskOptions`（14）。
-  - 其他 UI：`ui.setting_interface.SettingInterface`（12，94-96 嵌入）；`ui.icon.my_fluent_icon.MyFluentIcon`（15，停止按钮图标 127）。
-  - 第三方/标准库：`cv2`（视频读取与缩放）、`threading`（后台任务线程）、`multiprocessing`（提取子进程）、`time`、`traceback`、`PySide6`/`qfluentwidgets`（控件）。
+  - 依赖 `ui.setting_interface.SettingInterface`（12、95）、`ui.component.video_display_component.VideoDisplayComponent`（13）、`ui.component.task_list_component.TaskListComponent/TaskStatus/TaskOptions`（14）、`ui.icon.my_fluent_icon.MyFluentIcon.Stop`（15、127）。
+  - 依赖 `backend.config`（config/tr，16）、`backend.tools.subtitle_extractor_remote_call.SubtitleExtractorRemoteCall`（17）、`backend.tools.process_manager.ProcessManager`（18）。
+  - 子进程内 `from backend.main import SubtitleExtractor`（415）执行实际提取。
+  - 由 `gui.py` 挂载为导航页（主页）。
 
-- **维护与重构注意点**：
-  - `load_video` 中 `return True`（578）之后 579-582 是**不可达死代码**（重复的 `setMaximum`/`setValue`/`set_dragger_enabled`/`return`），可删除。
-  - `@Slot(int, bool)`（486）与 `update_progress` 实际 5 个形参（487）不匹配；同样 `progress_signal` 声明为 5 参数（21）。签名不一致可能导致槽调用被 Qt 截断/类型错误，重构时应统一。
-  - `update_progress` 参数命名混乱：`progress_remover`/`progress_finder` 实际分别对应 OCR 与帧提取进度（489、494），`progress_total` 未被使用；用 OCR 进度 `progress_remover` 反算视频帧定位（489）语义存疑，应改用帧提取进度。
-  - `run_button_clicked` 中 `task.output_path = None` 紧接着 `output_path = task.output_path`（363-364），注释"清理缓存, 使用动态路径"与实际不符——`output_path` 恒为 `None`，输出路径实际由 `SubtitleExtractor` 内部决定；需确认是否为有意设计。
-  - 异常分支（377-384）仅 `print(e)` 与输出 `Error: ...`，未像最外层（397）那样记录 `traceback`，排障信息有限；其 `continue` 行为与显式失败分支（334-344）一致，单个任务异常不会中断批量队列——这是有意的容错设计，重构时需保持。
-  - `open_file` 的 `files_loaded` 守卫（605-606）在全失败时静默返回（前面已逐条输出失败日志），没有汇总提示；如需用户感知可补 InfoBar。
-  - `finally` 中 `time.sleep(1)`（389）阻塞后台线程，停止响应会有最长约 1 秒延迟。
-  - `extractor_process` 的 `finally` 在每个**子进程内部**调用 `ProcessManager.instance().terminate_all()`（432）——子进程持有独立的单例，可能误杀子进程自己派生的进程；与设计意图（父进程统一管理）需核对。
-  - monkey-patch 的 `sr.manage_process`（422）依赖后端确实在提取过程中调用该方法来注册子进程 PID；后端若改名或去掉调用，UI 将无法追踪/终止 VSF 子进程。
-  - `running_sub_process_pids`（40、451）只在停止时清空（303），正常完成路径未清空，多次批量运行可能残留旧 PID。
-  - `closeEvent` 的 `disconnect` 整体包在 `try/except` 中且打印语焉不详（627-628），若某信号已断开会跳过后续 disconnect 与资源释放，应将各步拆开或逐个 try。
-  - `append_output` 的颜色靠中文/英文关键字硬编码匹配（526-540），新增日志文案若不命中则无色，维护成本高；建议改为结构化日志级别。
+- **维护注意点**：
+  - `load_video` 在 `return True`（578）之后仍有 579-582 的重复语句，属不可达死代码，重构时应删除，勿误以为生效。
+  - `open_file` 607 行用循环变量 `path` 求索引，实际指向"最后一个成功加载"的文件（因 602 行倒序遍历），命名与语义易误读；且依赖 `files_loaded` 非空（已由 605 行保证）。
+  - 手动信号连接与 `closeEvent` 手动断开成对出现，新增 connect 时须同步补 disconnect。
+  - `stop_button_clicked` 依赖 `running_sub_process_pids`/`running_process` 的完整记账；注册 manage_process 回调（449-452）向两者写入，改动时需保持同步。
+  - 子进程 options 通过 `setattr(sr, key, ...)`（418-419）注入，新增选项须确认 `SubtitleExtractor` 有同名属性。
 
 ---
 
-### ui/advanced_setting_interface.py
+### 2. ui/advanced_setting_interface.py
 
 - **路径**：`D:/VSCode/video-subtitle-extractor-main/ui/advanced_setting_interface.py`
 - **规模**：327 行
-- **职责**：高级设置页（继承 `ScrollArea`）。用四个 `SettingCardGroup` 分组承载全部高级、VideoSubFinder、开发、关于类设置卡片，并提供版本更新检查（手动 + 启动静默）、保存目录选择、反馈/版权/项目链接跳转，以及 macOS 滚动区样式修正。
+- **职责**：高级设置页（`ScrollArea`）。集中暴露高级/VideoSubFinder/开发/关于四组配置项（均为 qfluentwidgets 的 SettingCard，绑定 `config` 项自动持久化），并提供保存目录选择、版本更新检查、反馈/版权/项目链接。包含 `recBatchNumber`、`maxBatchSize` 两个当前**已真正接入后端**的卡片。
 
 - **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
 |---|---|---|
-| `AdvancedSettingInterface` | 18 | 高级设置类，继承 `ScrollArea` |
-| `__init__` | 21-25 | 创建 `VersionService`（24）、构建 UI（25） |
-| `__initWidget` | 27-44 | 滚动区容器/透明背景/滚动条策略（29-40），调用 `setup_ui`（43）与 `setup_layout`（44） |
-| `setup_layout` | 46-77 | 把 19 张卡片按 4 组加入 `expandLayout`，设置间距/边距（76-77） |
-| `setup_ui` | 79-264 | 创建 4 个分组与全部设置卡片、连接点击信号 |
-| `show_message_box` | 266-275 | 封装 `MessageBox`，可选"是"按钮及回调 |
-| `check_update` | 277-286 | `TaskExecutor.runTask(has_new_version).then(...)` 异步检查更新 |
-| `on_version_info_fetched` | 288-302 | 按检查结果弹出"有新版本/无更新"提示 |
-| `choose_save_directory` | 304-313 | 目录对话框→`config.set(config.saveDirectory, folder)`→刷新卡片内容 |
-| `macos_scrollarea_issue_workaround` | 315-321 | 仅 macOS：复位滚动条并强制布局 update/activate |
-| `resizeEvent` | 323-327 | macOS 下复位滚动条到 0 后调用父类 |
-
-**设置卡片 → 配置项 → 更新检查机制（全部列全）**：
-
-`advanced_group`（`tr["Setting"]["AdvancedSetting"]`，82 行）——13 张卡片：
-| 卡片 | 行号 | 配置项 | 类型 / 说明 |
-|---|---|---|---|
-| `rec_batch_number` | 91-97 | `config.recBatchNumber` | `RangeSettingCard`，每图同时识别文本框数 |
-| `max_batch_size` | 99-105 | `config.maxBatchSize` | `RangeSettingCard`，DB 算法每 batch 识别张数 |
-| `subtitle_area` | 107-114 | `config.subtitleArea` | `ComboBoxSettingCard`，`texts=tr['SubtitleArea'].values()` |
-| `extract_frequency` | 116-122 | `config.extractFrequency` | `RangeSettingCard`，每秒抓取帧数 |
-| `tolerant_pixel_y` | 124-130 | `config.tolerantPixelY` | `RangeSettingCard`，纵向容忍像素偏差 |
-| `tolerant_pixel_x` | 131-137 | `config.tolerantPixelX` | `RangeSettingCard`，横向容忍像素偏差 |
-| `subtitle_area_deviation_pixel` | 139-145 | `config.subtitleAreaDeviationPixel` | `RangeSettingCard`，字幕区偏移像素 |
-| `waterark_area_num` | 147-153 | `config.waterarkAreaNum` | `RangeSettingCard`，最可能出现的水印区域数（变量名拼写为 waterark） |
-| `threshold_text_similarity` | 155-161 | `config.thresholdTextSimilarity` | `RangeSettingCard`，文本相似度阈值 |
-| `drop_score` | 163-169 | `config.dropScore` | `RangeSettingCard`，置信度低于阈值的丢弃 |
-| `subtitle_area_deviation_rate` | 171-177 | `config.subtitleAreaDeviationRate` | `RangeSettingCard`，字幕区允许偏差率 |
-| `save_directory` | 179-186 | `config.saveDirectory` | `PushSettingCard`，点击→`choose_save_directory`（186）；展示值/默认值见 183 |
-| `check_update_on_startup` | 188-194 | `config.checkUpdateOnStartup` | `SwitchSettingCard`，启动时检查更新开关（UI 仅呈现，实际读取由 `VersionService` 负责） |
-
-`video_sub_finder_group`（`tr["Setting"]["VideoSubFinderSetting"]`，84 行）——2 张卡片：
-| 卡片 | 行号 | 配置项 | 类型 / 说明 |
-|---|---|---|---|
-| `video_sub_finder_cpu_cores` | 196-202 | `config.videoSubFinderCpuCores` | `RangeSettingCard`，VSF CPU 核心数 |
-| `video_sub_finder_decoder` | 204-211 | `config.videoSubFinderDecoder` | `ComboBoxSettingCard`，`texts=[item.value for item in VideoSubFinderDecoder]`（209） |
-
-`dev_group`（`tr["Setting"]["DevSetting"]`，86 行）——3 张卡片：
-| 卡片 | 行号 | 配置项 | 类型 / 说明 |
-|---|---|---|---|
-| `debug_ocr_loss` | 213-219 | `config.debugOcrLoss` | `SwitchSettingCard`，输出丢失的字幕帧 |
-| `debug_no_delete_cache` | 221-227 | `config.debugNoDeleteCache` | `SwitchSettingCard`，不删除缓存数据 |
-| `delete_empty_time_stamp` | 229-235 | `config.deleteEmptyTimeStamp` | `SwitchSettingCard`，删除空时间轴 |
-
-`about_group`（`tr["Setting"]["AboutSetting"]`，88 行）——3 张卡片：
-| 卡片 | 行号 | 配置/目标 | 类型 / 说明 |
-|---|---|---|---|
-| `feedback` | 237-246 | `PROJECT_ISSUES_URL` | `PrimaryPushSettingCard`，点击→`QDesktopServices.openUrl(PROJECT_ISSUES_URL)`（244-246） |
-| `copyright` | 248-255 | `VERSION` | `PrimaryPushSettingCard`，content 格式化 VERSION（252），点击→`check_update()`（255） |
-| `project_link` | 257-264 | `PROJECT_HOME_URL` | `HyperlinkCard`，直接打开项目主页 |
-
-**更新检查机制**：
-- 入口一（手动）：`copyright` 卡片点击（255）调用 `check_update()`，此时 `ignore=False`。
-- 入口二（启动静默）：`gui.py:61` 定时器 `timeout.connect(lambda: self.advancedSettingInterface.check_update(ignore=True))`。
-- 核心流程（277-286）：`TaskExecutor.runTask(self.version_manager.has_new_version).then(lambda success: self.on_version_info_fetched(success, ignore))`——异步执行 `VersionService.has_new_version`，结果回调 `on_version_info_fetched`。
-- 结果处理（288-302）：`success=True` → `show_message_box(UpdatesAvailableTitle, UpdatesAvailableDesc.format(lastest_version), True, 打开 PROJECT_RELEASES_URL 的 lambda)`（290-297）；`success=False 且 not ignore` → 弹出"NoUpdatesAvailable"（298-302）。`show_message_box`（266-275）在 `showYesButton=False` 时隐藏"是"按钮并把"取消"文案改为 Close。
+| `AdvancedSettingInterface` | 18 | 高级设置页 `ScrollArea` |
+| `__init__` | 21-25 | 创建 `VersionService()`（24）并调用 `__initWidget` |
+| `__initWidget` | 27-44 | 建滚动容器、`ExpandLayout`，透明背景、关横向滚动，调 `setup_ui`/`setup_layout` |
+| `setup_layout` | 46-77 | 把各卡片加入四个 `SettingCardGroup` 并加入布局，设间距/边距 |
+| `setup_ui` | 79-264 | 创建四个分组与全部设置卡片 |
+| `rec_batch_number` | 91-97 | `RangeSettingCard(config.recBatchNumber)`，每图同时识别文本框数 |
+| `max_batch_size` | 99-105 | `RangeSettingCard(config.maxBatchSize)`，DB 每 batch 图片数 / 帧预取队列容量 |
+| `save_directory` | 179-186 | `PushSettingCard`，clicked→`choose_save_directory` |
+| `check_update_on_startup` | 188-194 | `SwitchSettingCard(config.checkUpdateOnStartup)` |
+| `video_sub_finder_*` | 196-211 | CPU 核心数、解码组件（枚举 `VideoSubFinderDecoder`） |
+| `debug_* / delete_empty_time_stamp` | 213-235 | 开发组三个开关 |
+| `feedback / copyright / project_link` | 237-264 | 关于组：反馈链接、版权（触发检查更新）、项目主页 |
+| `show_message_box` | 266-275 | 封装 `MessageBox`，可选是否显示"是"按钮及其回调 |
+| `check_update` | 277-286 | `TaskExecutor.runTask(version_manager.has_new_version).then(...)` 异步检查 |
+| `on_version_info_fetched` | 288-302 | 有更新弹框并可跳转 releases；无更新按 `ignore` 决定是否提示 |
+| `choose_save_directory` | 304-313 | 目录对话框，`config.set(config.saveDirectory, folder)` 并刷新卡片内容 |
+| `macos_scrollarea_issue_workaround` | 315-321 | macOS 滚动区问题规避方法（当前未被调用，见注意点） |
+| `resizeEvent` | 323-327 | macOS 下重置纵向滚动条为 0（内联实现，未调用上面的 workaround） |
 
 - **信号与槽**：
-  - `save_directory.clicked` → `self.choose_save_directory`（186）
-  - `feedback.clicked` → `lambda: openUrl(PROJECT_ISSUES_URL)`（244-246）
-  - `copyright.clicked` → `lambda: self.check_update()`（255）
-  - （`gui.py:61`）定时器 `timeout` → `lambda: check_update(ignore=True)`（启动检查）
-  - `project_link` 为 `HyperlinkCard`（257），由 qfluentwidgets 内部处理点击，无显式 connect。
+  - `save_directory.clicked→choose_save_directory`（186）。
+  - `feedback.clicked→openUrl(PROJECT_ISSUES_URL)`（244-246）。
+  - `copyright.clicked→check_update()`（255）。
+  - `check_update().then→on_version_info_fetched`（285-286）。
+  - 其余卡片为 qfluentwidgets 声明式绑定 `configItem`，值变化由框架写回 `config` 并持久化，无需手动 connect。
 
-- **实现细节**：见上"设置卡片"与"更新检查机制"两表；`setup_layout`（46-77）决定卡片显示顺序与分组归属，新增设置卡片必须同时在 `setup_ui` 创建并在 `setup_layout` 的 `addSettingCard` 列表里登记，否则不会显示。`choose_save_directory`（304-313）用 `QFileDialog.getExistingDirectory`，空选择被规整为 `""`（309-310），并通过 `config.set` 写回配置（312）后刷新卡片展示（313）。macOS 修正（315-321、323-327）通过 `sys.platform == "darwin"` 判断，复位滚动条并强制布局重算，规避 ScrollArea 尺寸问题。
+- **实现细节**：
+  - 四个分组：`advanced_group`（82）、`video_sub_finder_group`（84）、`dev_group`（86）、`about_group`（88）。
+  - `recBatchNumber`/`maxBatchSize` 定义为 `RangeConfigItem`，范围分别 1-100（默认 6）、1-256（默认 10），见 `config.py:58/60`。二者**当前已接入后端**：`recBatchNumber` 在 `backend/tools/ocr.py:58` 作为 `rec_batch_size` 传入 `OnnxOcrRecogniser`（识别批大小）；`maxBatchSize` 在 `backend/main.py:985` 作为 options 的 `MAX_BATCH_SIZE`（注释标明"帧预取队列容量，供 OCR 生产者/消费者使用"）。即这两个卡片不再是纯展示项。
+  - 配置文本全部通过 `tr[...]` 取翻译；`save_directory` 内容在无值时显示 `SaveDirectoryDefault` 占位（183）。
+  - 版本检查为异步：`check_update` 用 `TaskExecutor.runTask`，避免在 UI 线程阻塞网络请求。
 
 - **调用关系**：
-  - backend：`backend.config`（`config`, `tr`, `VERSION`, `PROJECT_HOME_URL`, `PROJECT_ISSUES_URL`, `PROJECT_RELEASES_URL`，13）；`backend.tools.version_service.VersionService`（14）；`backend.tools.concurrent.TaskExecutor`（15）；`backend.tools.constant.VideoSubFinderDecoder`（16）。
-  - 第三方：`qfluentwidgets`（ScrollArea/ExpandLayout/各种 SettingCard/MessageBox 等，8-12）、`PySide6`（QtWidgets/QtCore/QtGui，6-7）。
-  - 被 `gui.py` 引用：`gui.py:28` 导入，`gui.py:82-83` 实例化，`gui.py:61` 定时器调用其 `check_update`，`gui.py:92-95` 切换页时调用 `macos_scrollarea_issue_workaround`。
+  - 依赖 `backend.config`（config/tr/VERSION/三个项目 URL，13）、`backend.tools.version_service.VersionService`（14）、`backend.tools.concurrent.TaskExecutor`（15）、`backend.tools.constant.VideoSubFinderDecoder`（16）。
+  - 由 `gui.py` 挂载为导航页；`gui.py` 的启动定时器会调用 `advancedSettingInterface.check_update(ignore=True)` 做静默更新检查。
+  - 与主页无直接数据耦合；通过全局 `config` 与后端共享设置值。
 
-- **维护与重构注意点**：
-  - 新增配置项需两处同步改动（`setup_ui` 创建 + `setup_layout` 的 `addSettingCard`），容易遗漏；可考虑用配置清单驱动。
-  - 变量名拼写错误：`waterark_area_num`（147、54）与 `config.waterarkAreaNum` 一致但疑似应为 `watermark`；修改需同步 config 与翻译键。
-  - `check_update_on_startup` 开关（188-194）在此页只是绑定到 config，真正的"启动时是否检查"判断在 `VersionService` 内部；而 `gui.py:61` 无条件建立定时器，需确认定时器回调或 `VersionService` 是否读取了该开关，否则开关可能无效。
-  - `on_version_info_fetched` 使用 `self.version_manager.lastest_version`（292，拼写 lastest），依赖 `VersionService` 同名属性，重构时注意。
-  - `check_update` 无失败回调：`TaskExecutor.runTask(...).then(...)` 只在成功时回调（285-286），网络异常/请求失败的提示缺失。
-  - `resizeEvent`（323-327）每次 resize 都复位滚动条到 0，可能造成用户滚动位置跳动；macOS workaround 应更精确。
-  - `macos_scrollarea_issue_workaround`（315-321）与 `resizeEvent`（323-327）内联的 macOS 逻辑重复（均复位滚动条），但前者还调用 `adjustSize`/`update`/`activate`，两者语义不完全一致，重构时应统一。
-  - `show_message_box`（266-275）的 `yesSlot` 在 `w.exec()` 返回真时执行，但"取消"按钮与关闭窗口的返回值语义依赖 qfluentwidgets，需回归测试。
-  - 大量卡片直接绑定 `config.xxx`，若配置项在 `backend/config.py` 中改名，此处会静默失效（AttributeError 可能在运行时才暴露）。
+- **维护注意点**：
+  - `macos_scrollarea_issue_workaround`（315）已定义但 `resizeEvent`（323-327）内联复制了同类逻辑而未调用它，属冗余方法；维修 macOS 滚动问题时改一处即可，避免两处不一致。
+  - 卡片顺序由 `setup_layout`（46-74）的 `addSettingCard` 调用顺序决定，与 `setup_ui` 创建顺序相互独立，调整展示顺序须改 `setup_layout`。
+  - `recBatchNumber`/`maxBatchSize` 已生效，修改其含义或范围需同步后端 `ocr.py:58` 与 `main.py:985`，否则卡片与后端语义脱节。
+  - `saveDirectory` 变更只影响后续任务输出路径；`choose_save_directory` 允许空串表示恢复默认。
 
 ---
 
-### ui/setting_interface.py
+### 3. ui/setting_interface.py
 
 - **路径**：`D:/VSCode/video-subtitle-extractor-main/ui/setting_interface.py`
-- **规模**：85 行
-- **职责**：六个"常用设置"的 `QVBoxLayout`（非独立窗口/页面）。被 `home_interface.py:94-96` 作为布局装入主页右侧的 `settings_container`，直接绑定 `config` 配置项，改动即时生效。
+- **规模**：130 行
+- **职责**：主页右侧的"常用设置区"，是一个 `QVBoxLayout`（非 QWidget），由 `home_interface.py:94-96` 通过 `setLayout` 嵌入。集中放置语言/模式、OCR 后端、模型档位、DML 设备、硬件加速、输出与分词开关，以及模型检测/一键下载卡片；构造时执行环境检测并在缺失模型/无 DML 设备时给出提示。
 
 - **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
 |---|---|---|
-| `SettingInterface` | 10 | 继承 `QtWidgets.QVBoxLayout` |
-| `__init__` | 12-85 | 设置边距（14）、创建 6 个设置卡片并逐个 `addWidget`、`addStretch(1)`（85） |
+| `SettingInterface` | 8 | 继承 `QtWidgets.QVBoxLayout`，常用设置布局容器 |
+| `__init__` | 11-101 | 依次创建 11 个设置卡片；末尾 `env_info=None`（100）+ `refresh_environment()`（101）启动检测 |
+| `interface_combo` | 17-21 | 界面语言（`config.interface`，texts 取 `config.intefaceTexts.keys()`） |
+| `language_combo` | 24-29 | 字幕语言（`config.language`，texts 由 validator.options 翻译） |
+| `mode_combo` | 32-36 | 识别模式/抽帧策略（`config.mode`） |
+| `backend_combo` | 39-44 | **OCR 后端**（`config.ocrBackend`，texts 固定 `['auto','cpu','dml']`） |
+| `tier_combo` | 47-54 | **模型档位**（`config.modelTier`，显示 light/precise，翻译缺失时回退英文） |
+| `device_combo` | 56-67 | **DML 设备**（`config.dmlDeviceId`，9 项：Auto + 0..7，显示文本用设备名） |
+| `hardware_acceleration` | 70-78 | 硬件加速开关；`HARDWARD_ACCELERATION_OPTION=False` 时置 False 并禁用（75-78） |
+| `generate_txt_switch` | 81-84 | 是否生成 TXT（`config.generateTxt`） |
+| `word_segmentation` | 87-91 | 是否重新分词（`config.wordSegmentation`） |
+| `model_check_card` | 94-98 | `PushSettingCard`，clicked→`_on_model_check_clicked`，显示模型状态/缺失详情 |
+| `refresh_environment` | 103-113 | 调 `env_check.detect_environment()`，更新卡片内容；无 DML 设备时 `InfoBar.warning` |
+| `_on_model_check_clicked` | 115-130 | 缺失时后台下载（含进度/完成回调），齐全时重新检测 |
 
-**六个常用设置（全部列全）**：
+- **信号与槽**：
+  - `model_check_card.clicked→_on_model_check_clicked`（97）。
+  - 其余 10 个卡片为声明式 `configItem` 绑定，值变更由 qfluentwidgets 框架写回全局 `config`。
+  - `InfoBar.warning` 以 `parent=self.parent`（113）挂载，即提示出现在传入的宿主容器（主页的 `settings_container`）。
 
-| # | 属性名 | 行号 | 配置项 | 控件类型 | 选项来源 / 说明 |
-|---|---|---|---|---|---|
-| 1 | `interface_combo` | 17-25 | `config.interface` | `ComboBoxSettingCard`（LANGUAGE） | `texts=config.intefaceTexts.keys()`——界面语言 |
-| 2 | `language_combo` | 28-36 | `config.language` | `ComboBoxSettingCard`（FONT） | `texts=[tr['Language'][i] for i in config.language.validator.options]`——字幕语言 |
-| 3 | `mode_combo` | 39-47 | `config.mode` | `ComboBoxSettingCard`（SETTING） | `texts=[tr['Mode'][i] for i in config.mode.validator.options]`——识别模式 |
-| 4 | `hardware_acceleration` | 50-57 | `config.hardwareAcceleration` | `SwitchSettingCard`（SPEED_HIGH） | 是否启用硬件加速；59-62 若 `HARDWARD_ACCELERATION_OPTION` 为假，强制勾选 False、禁用开关并写回 config |
-| 5 | `generate_txt_switch` | 65-72 | `config.generateTxt` | `SwitchSettingCard`（DOCUMENT） | 是否生成 TXT 文本字幕，content 为空 |
-| 6 | `word_segmentation` | 75-82 | `config.wordSegmentation` | `SwitchSettingCard`（EDIT） | 是否重新分词 |
+- **实现细节**：
+  - **OCR 后端卡片**（39-44）：绑定 `config.ocrBackend`（`config.py:90`，validator `['auto','cpu','dml']`），texts 与 validator 选项逐项对应。
+  - **模型档位卡片**（47-54）：绑定 `config.modelTier`（`config.py:92`，validator `['light','precise']`）；显示文本优先取 `tr['Setting']['ModelTierLight'/'ModelTierPrecise']`，缺失时回退 `'light'/'precise'`。选项顺序与 validator 顺序一致（light、precise）。
+  - **DML 设备卡片**（56-67）：构造时 `devices = env_check.list_dml_devices()`（57），构建 `{index字符串: name}` 映射（58）；显示文本第 0 项为自动（59 `AutoDevice`），随后 `for i in range(8)`（60-61）按索引取设备名，缺失则回填 `GPU #i`。因此**显示 9 项文本**对应 `config.dmlDeviceId` validator 的 9 个值 `'' + '0'..'7'`（`config.py:94-95`）——显示名与存储值解耦，存储值由 `ComboBoxSettingCard` 依据选项索引写入，保证与 validator 对齐。
+  - **启动检测**（100-101、103-113）：`refresh_environment()` 在构造末尾同步执行，`env_check.detect_environment()` 返回 `{dml_devices, model_tier, missing, model_dir, ready}`；`ready=True` 显示 `ModelReady`，否则显示 `env_check.describe_missing(info)`——后者包含**下载来源 URL + 模型目录**（`env_check.py:48-55`，URL 由 `model_download_url` 生成、目录为 `info['model_dir']`）。`dml_devices` 为空时弹 `InfoBar.warning`（110-113）。
+  - **一键下载**（115-130）：点击时若 `env_info is None` 或 `ready` 则仅重新检测；否则调用 `env_check.download_missing_models(info, progress, done)`。`progress`（122-123）/ `done`（125-128）回调把下载进度/结果写回 `model_check_card.setContent`，成功后再次 `refresh_environment()` 刷新状态。下载在 `env_check` 内部以守护线程执行，不阻塞 UI。
 
-- **信号与槽**：本文件没有显式 `connect`；卡片由 qfluentwidgets 的 `SettingCard` 内部直接读写绑定的 `ConfigItem`（即声明式绑定，无自定义槽函数）。
+- **调用关系**：
+  - 依赖 `backend.config`（config、tr、`HARDWARD_ACCELERATION_OPTION`，4）。
+  - 依赖 `backend.tools.env_check`：`list_dml_devices()`（57）、`detect_environment()`（105）、`describe_missing()`（109）、`download_missing_models()`（130）。`env_check` 内部再复用 `backend.tools.onnx_ocr` 的 `check_models / list_dml_devices / model_download_url / _download_model / _default_cache_dir`（`env_check.py:10-13`）。
+  - UI 控件来自 `qfluentwidgets`：`ComboBoxSettingCard`、`SwitchSettingCard`、`PushSettingCard`、`InfoBar`、`FluentIcon`（2-3）。
+  - 被 `home_interface.py:12,95` 作为布局嵌入主页右侧。
+  - 三个新配置项的下游消费者在 `backend/tools/ocr.py:28-50 (_resolve_config)`：`config.ocrBackend.value`（30）决定 providers（CPU/DML/自动）、`config.modelTier.value`（42）决定模型档位、`config.dmlDeviceId.value`（44-49）转为整型 device_id；总加速开关关闭时强制 CPU（31-33）。
 
-- **实现细节**：构造时先设置四边 16px 边距（14），随后按上表顺序创建六个卡片并 `addWidget`（25/36/47/57/72/82），最后 `addStretch(1)`（85）把剩余空间推到底部。硬件加速的特殊处理（58-62）：以全局常量 `HARDWARD_ACCELERATION_OPTION`（注意拼写 HARDWARD）判定硬件是否支持，不支持时把开关设为 False、`setEnabled(False)`，并通过 `config.set` 写回，避免界面显示与实际能力不一致。文件当前止于 85 行的 `addStretch(1)`，类内不含其他方法。
-
-- **调用关系**：`backend.config`（`config`, `tr`, `HARDWARD_ACCELERATION_OPTION`，8）；`qfluentwidgets`（2-7 行大量导入）；被 `ui/home_interface.py:12` 导入并在 94-96 作为布局嵌入主页。
-
-- **维护与重构注意点**：
-  - 第 2-7 行从 `qfluentwidgets` 导入了大量未使用的类（如 `FluentWindow`, `Slider`, `ProgressBar`, `SettingCardGroup`, `PushSettingCard`, `PrimaryPushSettingCard`, `OptionsSettingCard`, `FolderListSettingCard`, `HyperlinkCard`, `ColorSettingCard`, `CustomColorSettingCard`, `setTheme`, `Theme` 等），实际只用到 `ComboBoxSettingCard`/`SwitchSettingCard`/`FluentIcon`；可清理以减少耦合。
-  - `config.intefaceTexts`（23，拼写 inteface）与 `HARDWARD_ACCELERATION_OPTION`（8、59）均为历史拼写，重构需同步上游定义。
-  - 三个 ComboBox 的选项分别来自 `config.intefaceTexts.keys()` 与 `config.language.validator.options` / `config.mode.validator.options`（23、34、45），翻译键为 `tr['Language']` / `tr['Mode']`；新增语言/模式时须同时更新 validator.options 与翻译表，否则下拉项缺失或显示原始键。
-  - 作为 `QVBoxLayout` 而非 `QWidget`，不能再通过 `addSubInterface` 独立挂载；若未来需要单独页面需重构。
+- **维护注意点**：
+  - `device_combo` 的显示文本来自运行时设备枚举，而**选项数量固定为 9**（Auto + 0..7）；若改 validator 的选项集合（如扩到 0..15），必须同步 `range(8)`（60）与 `config.py:95` 的 validator，否则索引错位会把错误设备索引写入配置。
+  - `tier_combo` 的显示文本依赖翻译键，做了键缺失回退（52-53）；选项顺序须与 `config.modelTier` validator 一致，否则显示与存储值错配。
+  - `refresh_environment()` 在构造时同步执行（101），`detect_environment()` 会做模型/设备检查，构造成本非零；若首页启动变慢应关注此处。
+  - `InfoBar.warning(parent=self.parent)` 依赖构造传入的 parent；脱离 `home_interface` 单独实例化时 parent 必须为有效 QWidget。
+  - `model_check_card` 兼具"状态展示"和"一键下载"两个职责，下载回调直接改写卡片内容；并发重复点击可能触发多次下载，重构时宜加防重入。
+  - `env_info` 是懒状态：仅在构造与下载完成后刷新；后端配置若在其他界面被改动，本卡片不会自动同步，需手动调用 `refresh_environment()`。
 
 ---
 
-### ui/timeline_sync_interface.py
+### 4. ui/timeline_sync_interface.py
 
 - **路径**：`D:/VSCode/video-subtitle-extractor-main/ui/timeline_sync_interface.py`
 - **规模**：207 行
-- **职责**：时间轴同步页。让用户选择源视频、源字幕、目标视频，调用外部 `sushi` 命令（`sushi --src ... --dst ... --script ... --output ...`）把源字幕的时间轴适配到目标视频，并把 stdout/stderr 实时显示到日志框；进程结束后按退出码给出成功日志或失败日志 + `InfoBar.warning` 提示。
+- **职责**：时间轴同步页。选择"源视频 / 源字幕 / 目标视频"三个本地文件，调用外部 `sushi` 命令（`backend/` 下的脚本）把源字幕按源视频时间轴重定时后写入目标视频同名字幕文件，并实时展示进程输出；运行失败时给出 InfoBar 警告。
 
 - **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
 |---|---|---|
-| `Option` | 13-17 | 三个本地 `ConfigItem`（group=`TimelineSync`）：`SushiSourceVideo`/`SushiSourceSubtitle`/`SushiDestinationVideo` |
-| `TimelineSyncInterface` | 19 | 页面类，继承 `QWidget` |
-| `append_log_signal` | 21 | `Signal(str)`，回传 sushi 输出 |
-| `__init__` | 22-115 | 创建 `AsyncPythonRunner`（26）并注册回调（27-31），构建三组选择卡片、按钮、日志框并连线 |
-| `choose_path` | 117-126 | 文件对话框→写 `option.value`→刷新卡片 content |
-| `on_scroll_change` | 128-136 | 日志自动滚动开关（同主页逻辑） |
-| `append_output` | 138-149 | 追加一行日志并按需自动滚动 |
+| `Option` | 13-17 | 封装三个 `ConfigItem`（SushiSourceVideo/Subtitle/DestinationVideo），组名 `TimelineSync` |
+| `TimelineSyncInterface` | 19 | 同步页 `QWidget` |
+| 类信号 `append_log_signal(str)` | 21 | 子进程 stdout/stderr 回传日志 |
+| `__init__` | 22-115 | 初始化 `AsyncPythonRunner` 并注册回调、建三选择卡片/按钮/日志框 |
+| `choose_path` | 117-126 | 单文件对话框，写入 `option.value` 并刷新卡片内容；空选择直接返回 |
+| `on_scroll_change` | 128-136 | 日志自动滚动开关 |
+| `append_output` | 138-149 | 去空白后追加到日志框，受 `auto_scroll` 控制 |
 | `stop_button_clicked` | 151-154 | `python_runner.stop()` 并切换按钮 |
-| `run_button_clicked` | 156-174 | 校验文件存在→组装参数→启动 sushi→切换按钮 |
-| `is_selected_file_exists` | 176-185 | `os.path.exists` 校验，失败弹 `InfoBar.error` |
-| `output_path` | 187-189 | `@property`：目标视频同目录、同名、扩展名取源字幕扩展 |
-| `on_complete` | 191-207 | sushi 结束回调：恢复按钮；成功输出成功信息，失败输出错误日志并弹 `InfoBar.warning` |
+| `run_button_clicked` | 156-174 | 校验三个文件存在后启动 `sushi`，切换按钮 |
+| `is_selected_file_exists` | 176-185 | 文件不存在时 `InfoBar.error` 并返回 False |
+| `output_path`（property） | 187-189 | 目标视频同目录、同主名、扩展名取源字幕的输出路径 |
+| `on_complete` | 191-207 | 完成回调：成功输出路径，失败记日志并 `InfoBar.warning` |
 
 - **信号与槽**：
-  - `python_runner.register_callback(stdout=append_log_signal.emit, stderr=append_log_signal.emit, complete=on_complete)`（27-31）——stdout 与 stderr **合并到同一信号**。
-  - `source_video.clicked` → `lambda: choose_path(...)`（48）
-  - `source_subtitle.clicked` → `lambda: choose_path(..., "Subtitle File(*.srt, *.ass);;SRT File (*.srt);;ASS File (*.ass)")`（58）
-  - `destination_video.clicked` → `lambda: choose_path(...)`（68）
-  - `run_button.clicked` → `self.run_button_clicked`（89）
-  - `stop_button.clicked` → `self.stop_button_clicked`（95）
-  - `output_text.verticalScrollBar().valueChanged` → `self.on_scroll_change`（107）
-  - `append_log_signal` → `self.append_output`（115）
+  - `python_runner.register_callback(stdout/stderr=append_log_signal.emit, complete=on_complete)`（27-31）。
+  - `append_log_signal→append_output`（115）。
+  - 三个卡片 `clicked→choose_path(...)`（48、58、68），字幕卡片额外带 `*.srt/*.ass` 过滤器（58）。
+  - `run_button.clicked→run_button_clicked`（89）、`stop_button.clicked→stop_button_clicked`（95）。
+  - 日志框滚动条 `valueChanged→on_scroll_change`（107）。
 
-- **实现细节 / sushi 调用链**：
-
-1. 用户在三张 `PushSettingCard`（41-69）分别选择源视频、源字幕、目标视频，路径存入本地 `Option`（15-17）并显示在卡片 content（126）。
-2. `run_button_clicked`（156-174）先 `python_runner.stop()`（158，清理上次进程），再依次用 `is_selected_file_exists` 校验三个路径（160-165），任一不存在则弹 `InfoBar.error`（176-185）并中止。
-3. 调用 `self.python_runner.start("sushi", cwd="./backend/", args=['--src', 源视频, '--dst', 目标视频, '--script', 源字幕, '--output', self.output_path], python_args=["-u"])`（167-172）。
-4. `AsyncPythonRunner.start`（`python_runner.py:42-89`）：用 `sys.executable` 拼命令（57-66）→ `subprocess.Popen(cmd, stdout=PIPE, stderr=PIPE, encoding='utf-8', text=True, bufsize=1, cwd='./backend/')`（69-78）→ 启动 stdout/stderr 两个 reader 线程（81-82）与一个 monitor 线程（85-89）。
-5. reader 线程逐行读取（`python_runner.py:95-105`）并触发 stdout/stderr 回调 → `append_log_signal.emit` → 主线程 `append_output`（138-149）显示。
-6. monitor 线程 `process.wait()` 后触发 complete 回调（`python_runner.py:107-111`）→ `on_complete`（191-207）恢复按钮、按 code 处理。
-7. `output_path`（187-189）计算为 `目标视频目录下 / 目标视频名(去扩展) + 源字幕扩展名`（如 `film.mp4` + `sub.srt` → `film.srt`）。
-
-**完成回调 `on_complete`（191-207，成功/失败两支齐全）**：
-- 先恢复按钮：`stop_button` 隐藏、`run_button` 显示（192-193）。
-- 成功分支：`return_code == 0` 时 emit `Synced subtitle: {self.output_path}` 并 `return`（194-196）。
-- 失败分支：`return_code != 0` 时 emit `字幕同步失败，退出码: {return_code}`（197），并在 `try` 内局部导入 `InfoBar, InfoBarIcon`（199）后调用 `InfoBar.warning(title=self.tr('同步失败'), content=self.tr('字幕同步进程异常退出，请查看输出日志。'), duration=5000, parent=self)`（200-205）；`except Exception: pass`（206-207）兜底，避免弹窗异常影响回调。用户据此既能从日志看到退出码，也能通过 InfoBar 得知同步失败。
+- **实现细节**：
+  - **运行参数**（167-172）：`python_runner.start("sushi", cwd="./backend/", args=['--src', 源视频, '--dst', 目标视频, '--script', 源字幕, '--output', output_path], python_args=["-u"])`，`-u` 保证输出不缓冲以便实时刷新。
+  - **前置校验**（160-165）：依次对源视频、源字幕、目标视频调用 `is_selected_file_exists`，任一失败即 return；错误提示含字段名与路径（178-183）。
+  - **输出路径**（187-189）：`os.path.join(dirname(目标视频), f"{stem(目标视频)}{suffix(源字幕)}")`，即字幕扩展名跟随源文件。
+  - **失败提示**（191-207）：`on_complete` 中 `return_code==0` 时输出 `Synced subtitle: <path>` 并 return；否则输出"字幕同步失败，退出码..."日志，并在 `try` 内局部 `from qfluentwidgets import InfoBar, InfoBarIcon` 后 `InfoBar.warning(title='同步失败', content='字幕同步进程异常退出，请查看输出日志。', duration=5000, parent=self)`，异常被 `except: pass` 吞掉。
+  - 顶部第 8 行已导入 `InfoBar`，`on_complete` 内又重复局部导入（199），属冗余但无害。
 
 - **调用关系**：
-  - backend：`backend.config.tr`（9）；`backend.tools.python_runner.AsyncPythonRunner`（10）。
-  - UI：`ui.icon.my_fluent_icon.MyFluentIcon`（11，停止按钮图标 93）。
-  - 外部命令：`sushi`（通过 `AsyncPythonRunner` 以 `sys.executable` 启动 `sushi` 脚本，`cwd=./backend/`）。
-  - 间接：`AsyncPythonRunner` 依赖 `backend.tools.process_manager.ProcessManager`（`python_runner.py:6、120`）。
-  - 被 `gui.py:29、80-81、87` 导入/实例化/挂载为第二页。
+  - 依赖 `backend.config.tr`（9）、`backend.tools.python_runner.AsyncPythonRunner`（10）、`ui.icon.my_fluent_icon.MyFluentIcon.Stop`（11、93）。
+  - `AsyncPythonRunner` 以 `cwd="./backend/"` 执行 `sushi`；输出路径计算依赖本地文件系统。
+  - 由 `gui.py` 挂载为独立导航页。
 
-- **维护与重构注意点**：
-  - `on_complete` 失败分支的 `InfoBar` 在第 8 行已从 `qfluentwidgets` 顶层导入，199 行又局部 `from qfluentwidgets import InfoBar, InfoBarIcon` 属重复导入（且 `InfoBarIcon` 未被使用），可清理；`except Exception: pass`（206-207）会静默吞掉弹窗异常，排障时建议记日志。
-  - stdout 与 stderr 被合并到同一 `append_log_signal`（28-29）且 `append_output`（138-149）不做区分/着色，无法从视觉上区分正常输出与错误输出（对比主页 `append_output` 的关键字着色）。
-  - `python_runner.start` 在进程已存在时会 `raise RuntimeError`（`python_runner.py:54-55`），`run_button_clicked` 未用 try/except 包裹（167-172）；虽先调用了 `stop()`（158）缓解，但 stop 之后若回调尚未清理 `self.process` 仍可能触发。
-  - `AsyncPythonRunner.stop()`（`python_runner.py:117-121`）只把 `self.process=None`，**不更新 `returncode`**，因此 `is_running()` 仍返回 True、monitor 线程的 complete 回调不会因 stop 而触发；UI 只能靠 `stop_button_clicked`（151-154）手动切按钮，状态管理与 runner 内部不一致。
-  - `is_selected_file_exists`（176-185）仅做 `os.path.exists`，不校验文件是否可读、是否真的是视频/字幕格式，也不校验三个路径是否指向同一文件等语义。
-  - `output_path`（189）在目标视频路径异常时（如根目录/空串）可能拼出不合法路径；前置 exists 校验降低了概率但未根除。
-  - `choose_path`（117-126）无异常保护，且 `QFileDialog.getOpenFileName` 的 `filters` 对源视频/目标视频传 `None`（48、68），未限制视频格式。
-  - `button_container` 使用**硬编码浅色样式**（76-80：`#fcfdfe`/`#eeeff0`），不随应用深色主题变化，与其他 qfluentwidgets 卡片风格不一致。
-  - `Option`（13-17）不使用全局 `config`，而是自建 `ConfigItem`（group="TimelineSync"）；需确认这些值是否随应用配置持久化（取决于 `ConfigItem` 实现），重启后是否保留。
-  - sushi 参数名 `--src/--dst/--script/--output`（168-171）必须与 `backend/` 下 `sushi` 脚本的参数定义一致，升级 sushi 时需同步核对。
+- **维护注意点**：
+  - `output_path` 依赖 `option.destination_video.value` 与 `option.source_subtitle.value` 非空；虽然 `run_button_clicked` 做了存在性校验，但 `output_path` 作为 property 可被任意时刻读取，单独调用时需保证两路径已设置。
+  - `choose_path`（117）中 `option.value = path`（125）直接写配置值而未走 `config.set`，与高级设置页的持久化方式不同；需确认 `ConfigItem.value` 直写是否满足持久化需求。
+  - `on_complete` 的 `except: pass`（206-207）会静默吞掉 InfoBar 构造异常，排障时不易发现提示失败；建议收紧异常范围。
+  - `InfoBar` 已在模块顶部导入（8），`on_complete` 内重复导入（199）可清理。
+  - `stop_button_clicked` 与 `run_button_clicked` 的按钮显隐必须成对；`on_complete` 也负责复位（192-193），三条路径需保持一致。
 
 ---
 
-### ui/icon/my_fluent_icon.py
+### 5. ui/icon/my_fluent_icon.py
 
 - **路径**：`D:/VSCode/video-subtitle-extractor-main/ui/icon/my_fluent_icon.py`
 - **规模**：11 行
-- **职责**：定义一个自定义 Fluent 图标枚举 `MyFluentIcon`，目前仅提供停止按钮图标 `Stop`，并按当前主题自动选择白色/黑色 SVG。
+- **职责**：定义应用自定义的 Fluent 图标枚举 `MyFluentIcon`，目前仅含 `Stop` 停止图标；按主题（亮/暗）返回对应颜色的 SVG 文件路径，供停止按钮使用。
 
 - **关键类/函数**：
 
 | 名称 | 行号 | 说明 |
 |---|---|---|
-| `MyFluentIcon` | 6 | 继承 `FluentIconBase, Enum` |
+| `MyFluentIcon` | 6 | 继承 `FluentIconBase` + `Enum` 的自定义图标枚举 |
 | `Stop` | 7 | 枚举成员，值 `"stop"` |
-| `path` | 9-11 | 返回与主题匹配的图标路径 |
+| `path(self, theme=Theme.AUTO)` | 9-11 | 按主题返回 `./ui/icon/{值}_{颜色}.svg`，颜色由 `getIconColor(theme)` 给出 white/black |
 
-**主题适配说明**：
-- `path(self, theme=Theme.AUTO)`（9）调用 `getIconColor(theme)`（10 注释），该函数按当前主题返回 `"white"` 或 `"black"`；据此拼接路径 `f'./ui/icon/{self.value}_{getIconColor(theme)}.svg'`（11），即 `Stop` 在亮色主题下解析为 `./ui/icon/stop_black.svg`、暗色主题下为 `./ui/icon/stop_white.svg`。
-- 因 `FluentIconBase` 的图标加载会在主题切换时以新 theme 重新调用 `path()`，该图标可随应用明暗主题自动切换颜色，无需手动刷新。
-- 使用方：`ui/home_interface.py:15` 导入、`127` 用于停止按钮 `setIcon(MyFluentIcon.Stop)`；`ui/timeline_sync_interface.py:11` 导入、`93` 用于停止按钮。
+- **信号与槽**：无（纯图标/路径工具类，不涉及信号）。
 
-- **信号与槽**：无（纯图标定义类）。
+- **实现细节**：
+  - `path()`（9-11）用 f-string 拼路径：`./ui/icon/{self.value}_{getIconColor(theme)}.svg`（11）。`getIconColor` 依主题返回 `"white"` 或 `"black"`（注释 10），因此 `Stop` 映射到 `./ui/icon/stop_white.svg` / `stop_black.svg`。
+  - 路径为**相对路径**，依赖进程工作目录包含 `ui/`（项目根运行）。
 
-- **实现细节**：见"主题适配说明"。`Enum` 成员值 `"stop"`（7）直接作为文件名前缀，新增图标只需在枚举中加成员并放置同名 `_{white|black}.svg` 文件即可复用同一适配逻辑。
+- **调用关系**：
+  - 依赖 `qfluentwidgets` 的 `getIconColor`、`Theme`、`FluentIconBase`（3）。
+  - 消费方：`home_interface.py:15,127`（`self.stop_button.setIcon(MyFluentIcon.Stop)`）与 `timeline_sync_interface.py:11,93`（停止按钮）。
 
-- **调用关系**：`qfluentwidgets`（`getIconColor`, `Theme`, `FluentIconBase`，3）；被 `ui/home_interface.py`（15、127）与 `ui/timeline_sync_interface.py`（11、93）引用。
+- **维护注意点**：
+  - 需保证 `ui/icon/stop_white.svg` 与 `stop_black.svg` 两份资源存在，否则图标加载失败。
+  - 路径为相对路径，改用打包/不同工作目录启动时可能失效；新增图标成员须同时补齐对应两套主题 SVG。
+  - 新增枚举成员时保持 `value` 与文件名前缀一致（ `{self.value}_{color}.svg` 约定）。
 
-- **维护与重构注意点**：
-  - 路径是**运行时相对路径** `./ui/icon/...`（11），依赖进程工作目录为项目根；若从其他目录启动或打包后路径变化，图标会加载失败——建议改用基于 `__file__` 的绝对/资源路径。
-  - 必须保证 `ui/icon/stop_white.svg` 与 `stop_black.svg` 两个文件同时存在，否则某一主题下图标缺失。
-  - `theme` 参数默认 `Theme.AUTO`（9），跟随系统/应用主题；若需强制某主题可在调用处传入，但目前使用方直接传枚举成员、未显式指定。
-  - 新增图标成员时应同步补充对应两个颜色的 SVG，并确认 `getIconColor` 的返回值与文件命名严格一致。
+---
+
+本分片覆盖 `ui/` 根目录 5 个文件（630 + 327 + 130 + 207 + 11 行）；`ui/component/` 子目录见分片 07。
 
 ## 七、UI 组件 ui/component/
 
@@ -2601,51 +2424,48 @@ Slot 装饰器：`processing_finished`（471，无参数）、`update_progress`�
 
 ---
 
-## 八、汇总：已修复项与后续建议
+## 八、修复与优化汇总
 
-> 以下汇总当前代码中已经处理的确定性缺陷，以及仍建议后续推进的方向。描述以最终代码为准。
+> 以下汇总当前代码中已处理的缺陷与已完成的优化，以及仍建议后续推进的方向。以最终代码为准。
 
-### 已修复的确定性缺陷
+### 已完成的缺陷修复
 
-| 类别 | 修复内容 | 位置 |
+| 类别 | 内容 | 位置 |
 |---|---|---|
-| 崩溃 | `manage_process` 补 `self`，CLI 直跑不再因方法签名报错 | `backend/main.py` |
-| 崩溃 | `tolerantPixelX/Y` 比较补 `.value` | `backend/main.py` |
-| 崩溃 | `Image.ANTIALIAS` 改为 `Image.Resampling.LANCZOS` | `backend/main.py` |
-| 健壮性 | `run()` 加 try/finally，异常时仍释放锁 | `backend/main.py` |
-| 健壮性 | 无 stdin 时的交互过滤改用 `_safe_input`，返回空串而非抛 EOFError | `backend/main.py` |
-| 行为对齐 | `accurate` 模式无条件走自研逐帧检测，与 README 一致 | `backend/main.py` |
-| 行为对齐 | `auto` 模式无加速时用轻量模型 | `backend/tools/paddle_model_config.py` |
-| 行为对齐 | `OcrRecogniser` 改用硬件加速单例，避免加速状态丢失 | `backend/tools/ocr.py` |
-| DirectML | 新增 ONNX Runtime + `DmlExecutionProvider` 后端，官方 PP-OCRv5 ONNX 模型按需下载，`dml_ocr.py` 内联 DBNet 后处理与 CTC 解码；已在本机验证中英文识别 | `backend/tools/dml_ocr.py` |
-| 依赖 | DirectML 依赖改为 `onnxruntime-directml>=1.24.4` + `onnx` + `PyYAML`，移除无效 paddle2onnx；中英文 README 同步 | `requirements_directml.txt`、`README*.md` |
-| 交互 | 批量任务单个失败由 `break` 改 `continue`，不再放弃整个队列 | `ui/home_interface.py` |
-| 交互 | `open_file` 增加 `files_loaded` 为空的防护 | `ui/home_interface.py` |
-| 交互 | 时间轴同步失败补充日志与 InfoBar 提示 | `ui/timeline_sync_interface.py` |
-| 数据 | `selection_rect` 统一为 `SubtitleArea` 类型，消除类型污染 | `ui/component/video_display_component.py` |
-| 逻辑 | `in_ab_section()` 按 `ab_section` 范围判断，不再恒 True | `backend/bean/subtitle_area.py` |
-| 进程 | 仅对仍存活的进程执行 kill/taskkill，避免误杀复用 PID | `backend/tools/process_manager.py` |
-| 遗留 | `sushi_main.py` 修复 `subtitle` 未定义、日志元组、ffmpeg 路径、参数校验与临时文件清理 | `backend/sushi/sushi_main.py` |
-| 遗留 | 远程调用枚举尾逗号移除；`queue.get` 加超时使 `stop()` 可退出 | `backend/tools/subtitle_extractor_remote_call.py` |
-| 遗留 | Windows 系统代理读取修复元组解包 TypeError | `backend/tools/version_service.py` |
-| 清理 | `reformat.py` 的 `__main__` 调试硬编码改命令行参数 | `backend/tools/reformat.py` |
-| 清理 | 删除 `gui.py` 死方法与 `setting_interface.py` 空方法 | `gui.py`、`ui/setting_interface.py` |
-| 工程 | 仓库纳入 Git；修正 `.gitignore` 误忽略 `requirements.txt`；模型目录排除 | `.gitignore` |
+| 崩溃 | `manage_process` 补 `self`；`tolerantPixelX/Y` 补 `.value`；`Image.ANTIALIAS` 换 `LANCZOS` | `backend/main.py` |
+| 健壮性 | `run()` 加 try/finally 保证锁释放；无 stdin 时用 `_safe_input` 避免 EOFError | `backend/main.py` |
+| 交互 | 批量任务单失败改 `continue`；`open_file` 空列表防护；时间轴同步失败补提示 | `ui/` |
+| 数据 | `selection_rect` 统一为 `SubtitleArea`；`in_ab_section` 按范围判断 | `ui/component/`、`bean/` |
+| 进程 | 仅对存活进程 kill/taskkill，避免误杀复用 PID | `tools/process_manager.py` |
+| 遗留 | `sushi_main.py` 未定义变量/ffmpeg 路径/临时文件清理；远程调用枚举尾逗号与 stop 退出；Windows 代理元组解包 | `tools/`、`sushi/` |
 
-### 仍建议后续推进的方向
+### 已完成的架构优化
 
-- **平台二进制**：仓库只有 Windows 版 VideoSubFinder，macOS/Linux 分支引用的二进制缺失；如需跨平台，应补充对应构建或改用纯 ONNX 检测路径。
-- **构建一致性**：5 个 workflow 均发布同一 tag 的 prerelease，且 paddle 版本在 requirements / README / workflow / makedist 间仍有漂移，建议合并为 matrix 并统一版本。
-- **第三方许可**：sushi 上游为 MIT，仓库根目录为 Apache-2.0，缺少第三方声明文件。
-- **多选区落地**：后端 `sub_area` 仍是单值，GUI 只取第一个选区；`subtitleSelectionAreas` 的多段能力未贯通。
-- **断点续传**：`run()` 开头无条件删除缓存目录，尚无中断续跑能力。
-- **死配置/死代码**：`recBatchNumber`、`maxBatchSize` 仍未被后端读取；主题监听相关代码未启用。
-- **测试覆盖**：目前验证以静态阅读与关键路径验证为主，建议为三种模式、批量任务、时间轴同步补自动化用例。
+| 优化 | 说明 |
+|---|---|
+| **PP-OCRv5 → v6** | 模型全部升级到 PP-OCRv6 ONNX（det small + rec tiny/small）；字典与后处理兼容，已验证识别。 |
+| **统一 ONNX 后端** | 移除 PaddleOCR / PaddlePaddle 依赖，CPU 与 DML 后端共用 `onnx_ocr.py`，仅 provider 不同。 |
+| **仅保留 CPU / DML** | 删除 CUDA 检测、VSF 的 `--use_cuda`、4 个 CUDA workflow、makedist 的 cuda 参数；仅支持 Windows。 |
+| **模型档位独立** | 新增 `modelTier`（light/precise），与抽帧 `mode` 正交，可自由组合。 |
+| **DML 设备可选** | 新增 `list_dml_devices()` 枚举设备，`dmlDeviceId` 配置可指定具体 GPU 的 `device_id`。 |
+| **启动检测 + 一键下载** | `env_check.py` 在 GUI 启动时检测模型齐全性与 DML 设备；缺失时提示下载 URL/目录并提供一键下载。 |
+| **配置项全部生效** | 32 个配置项当前全部被后端读取；`recBatchNumber` → 识别批大小，`maxBatchSize` → 帧预取队列容量。 |
+| **识别批量化** | `_rec_predict_batch()` 按批大小批量推理，减少逐框调用开销。 |
+| **构建收敛** | workflow 从 5 个减为 CPU/DML 两个；移除 `pip freeze` 覆盖 requirements.txt 的问题。 |
+
+### 仍建议后续推进
+
+- **第三方许可**：sushi 上游为 MIT，仓库根目录为 Apache-2.0，缺第三方声明文件。
+- **多选区落地**：后端 `sub_area` 仍是单值，GUI 只取第一个选区。
+- **断点续传**：`run()` 开头无条件删缓存，尚无中断续跑能力。
+- **主题系统**：主题监听代码未启用，可决定恢复或彻底移除。
+- **自动化测试**：关键路径（三模式、批量任务、时间轴同步、模型下载）建议补自动化用例。
+- **CPU 性能**：ONNX CPU 推理相比 PaddlePaddle MKLDNN 可能略慢，如追求 CPU 极限可专项优化。
 
 ---
 
 ## 本文档的维护方式
 
 - 各章原始分片保存在 `.workbuddy/analysis/00-header.md`、`01…07-*.md`、`08-footer.md`；源码变化后重新精读对应分片并按序拼接即可。
-- 文中所有行号对应当前最终代码；源码改动后需同步修订受影响分片的行号与说明。
+- 文中行号对应当前最终代码；源码改动后需同步修订受影响分片。
 - 这是静态分析文档，不替代运行验证。
