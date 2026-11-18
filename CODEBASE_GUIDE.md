@@ -162,8 +162,8 @@ flowchart TD
 - `backend/interface/*.ini`：8 种界面语言（各含后端/档位/设备/模型检测文案）。
 - `backend/configs/typoMap.json`：文本替换规则（key 为正则）。
 - `backend/subfinder/windows/`：VideoSubFinder.exe + FFmpeg/OpenCV/CUDA 运行库；**无 macOS/Linux 二进制**。
-- `.github/workflows/`：仅 `build-windows-cpu.yml` 与 `build-windows-directml.yml`。
-- `requirements.txt` / `requirements_directml.txt`：CPU / DML 依赖（DML 版需先卸载 CPU 版 onnxruntime）。
+- `.github/workflows/`：唯一 `build-windows.yml`（CPU + DirectML 单一安装包，不再区分 CPU/DML 构建变体）。
+- `requirements.txt`：唯一依赖文件，使用 `onnxruntime-directml>=1.24.4`（自带 CPU + DML 双 provider，装一次即可两种模式切换）。
 
 ---
 
@@ -179,7 +179,7 @@ flowchart TD
 
 - `gui.py` 是基于 PySide6 + qfluentwidgets 的程序入口，构建三标签主窗口（主页 / 时间轴同步 / 高级设置），负责窗口生命周期、更新提醒、窗口位置持久化与子进程清理。
 - `backend/config.py` 是唯一的配置中心，以 `QConfig` 子类 `Config` 集中声明 **32 项配置**，通过 `qconfig.load` 从 `config/config.json` 载入，并按界面语言动态加载 `interface/*.ini` 翻译。
-- 当前项目**仅支持 Windows 平台、CPU 与 DML 两种 OCR 后端**；OCR 推理统一走 `onnxruntime` + 官方 **PP-OCRv6 ONNX 模型**；`requirements.txt` / `requirements_directml.txt` 中已不含 PaddlePaddle / PaddleOCR（CPU 版 `onnxruntime~=1.24` 与 DML 版 `onnxruntime-directml>=1.24.4` 二选一，不可共存）。
+- 当前项目**仅支持 Windows 平台、单一安装包同时支持 CPU 与 DML 两种 OCR 推理模式**；OCR 统一走 `onnxruntime-directml`（自带 CPUExecutionProvider + DmlExecutionProvider）+ 官方 **PP-OCRv6 ONNX 模型**；不含 PaddlePaddle / PaddleOCR。2026 年假定所有 GPU 支持 DX12，故不再提供 CPU-only 版本，唯一依赖文件为 `requirements.txt`。
 - `config.py` 中新增的 `ocrBackend`（auto/cpu/dml）、`modelTier`（light/precise）、`dmlDeviceId`（'' + '0'..'7'）三项，配合保留的 `hardwareAcceleration` 总开关（关闭时强制 CPU），共同构成后端选择链路。
 - `config.py` 顶部常量 `HARDWARD_ACCELERATION_OPTION`（**拼写保留**）仍存在，作为 `hardwareAcceleration` 的默认值来源，并在 UI 层被读取用于强制关闭开关。
 
