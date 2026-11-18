@@ -64,6 +64,26 @@ MODULES = (
     "showinfm",
 )
 
+# 项目自身模块：必须能从打包产物中导入。历史上 ui/icon/ 被 .gitignore 的
+# macOS "Icon" 规则误伤而未入库，导致 CI 全绿但用户启动即 ModuleNotFoundError；
+# 另有 FluentIcon.CHART 在 qfluentwidgets 1.11 被移除的 API 不兼容。把这些模块
+# 纳入冒烟测试，可在 CI 阶段拦截同类回归，而不是等用户下载后反馈。
+PROJECT_MODULES = (
+    "gui",
+    "ui.home_interface",
+    "ui.setting_interface",
+    "ui.timeline_sync_interface",
+    "ui.advanced_setting_interface",
+    "ui.component.task_list_component",
+    "ui.component.video_display_component",
+    "ui.icon.my_fluent_icon",
+    "backend.config",
+    "backend.tools.ocr",
+    "backend.tools.onnx_ocr",
+    "backend.tools.env_check",
+    "backend.tools.subtitle_detect",
+)
+
 # _pth 里声明的 site-packages 相对路径（QPT 约定）
 SITE_PACKAGES_REL = os.path.join("Lib", "site-packages")
 
@@ -105,18 +125,30 @@ def _verify_imports_in_child(python_exe, module_dir, target, script_path):
     env = os.environ.copy()
     env["QPT_MODE"] = "Debugging"
     env["PYTHONIOENCODING"] = "utf-8"
+    # 无头环境下 import Qt 模块不创建窗口，但设 offscreen 更稳妥
+    env["QT_QPA_PLATFORM"] = "offscreen"
 
     code = r"""
 import importlib, sys, os
 target = sys.argv[1]
 site_packages = sys.argv[2]
-# target 优先，其后是打包目录自带的 site-packages（含 CRT 相关与 QPT 运行时）
-for p in (target, site_packages):
+resources_dir = sys.argv[3]
+# resources_dir 是项目自身模块根目录（gui.py / ui / backend 所在处）
+for p in (resources_dir, target, site_packages):
     if p not in sys.path:
         sys.path.insert(0, p)
 failed = []
-mods = __MODULES__
-for name in mods:
+# 先校验第三方依赖
+for name in __MODULES__:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        failed.append((name, type(exc).__name__ + ": " + str(exc)))
+        print("[FAIL] " + name + ": " + str(exc), file=sys.stderr)
+    else:
+        print("[ OK ] " + name)
+# 再校验项目自身模块（拦截源码未入库 / API 不兼容）
+for name in __PROJECT_MODULES__:
     try:
         importlib.import_module(name)
     except Exception as exc:
@@ -136,11 +168,12 @@ except Exception as exc:
 if failed:
     raise SystemExit("冒烟测试失败，共 " + str(len(failed)) + " 项：" + repr(failed))
 print("SMOKE TEST PASSED")
-""".replace("__MODULES__", repr(MODULES))
+""".replace("__MODULES__", repr(MODULES)).replace("__PROJECT_MODULES__", repr(PROJECT_MODULES))
 
+    resources_dir = os.path.join(module_dir, "resources")
     proc = subprocess.run(
-        [python_exe, "-c", code, target, os.path.join(module_dir, SITE_PACKAGES_REL)],
-        env=env, cwd=module_dir,
+        [python_exe, "-c", code, target, os.path.join(module_dir, SITE_PACKAGES_REL), resources_dir],
+        env=env, cwd=resources_dir,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace")
     output = proc.stdout

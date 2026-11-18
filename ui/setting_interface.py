@@ -45,7 +45,7 @@ class SettingInterface(QtWidgets.QVBoxLayout):
 
         # 模型档位选择
         self.tier_combo = ComboBoxSettingCard(
-            configItem=config.modelTier, icon=FluentIcon.CHART,
+            configItem=config.modelTier, icon=FluentIcon.PIE_SINGLE,
             title=tr["Setting"]["ModelTier"],
             content=tr["Setting"]["ModelTierDesc"],
             parent=parent,

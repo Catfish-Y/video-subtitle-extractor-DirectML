@@ -97,8 +97,11 @@ modules.xml
 .AppleDouble
 .LSOverride
 
-# Icon must end with two \r
-Icon
+# macOS 卷标图标文件（仅仓库根目录）。原规则 `Icon` 不区分大小写，会误伤
+# 本项目的 ui/icon/ 目录，导致 gui 必需的 my_fluent_icon.py 与 svg 无法入库，
+# CI 打包缺失后启动即 ModuleNotFoundError: No module named 'ui.icon'。
+/Icon
+!ui/icon/
 
 
 # Thumbnails
