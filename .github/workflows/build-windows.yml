@@ -55,14 +55,14 @@ jobs:
         cp ./vse_out/Debug/Debug-进入虚拟环境.cmd ./vse_out/Release/
       env:
         QPT_Action: "True"
-    # 关键关卡：用打包后的解释器验证所有依赖可导入、DML 可用。
-    # 该步骤失败会直接中止工作流，杜绝再次发布 "启动即崩溃" 的包。
+    # 关键关卡：用打包后的解释器把 opt/packages 的 wheel 部署到临时目录，
+    # 验证所有依赖可导入、DML 可用。失败即中止，杜绝发布 "启动即崩溃" 的包。
+    # 必须设 QPT_MODE=Debugging，否则 QPT 的 sitecustomize 会尝试自动部署并拉起 GUI。
     - name: 验证 Release 运行环境
       shell: bash
       run: |
         cd vse_out/Release
-        ROOT="$(pwd -W)"
-        ./Python/python.exe -S -c "import sys, runpy; sys.path.insert(0, r'$ROOT/Lib/site-packages'); runpy.run_path(r'$ROOT/resources/backend/tools/release_smoke_test.py', run_name='__main__')"
+        QPT_MODE=Debugging ./Python/python.exe resources/backend/tools/release_smoke_test.py
     - name: 上传 Debug 文件夹到 Artifacts
       uses: actions/upload-artifact@v7
       with:

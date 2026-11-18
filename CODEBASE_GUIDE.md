@@ -2464,7 +2464,7 @@ flowchart TD
 |---|---|---|
 | 依赖清单 | `requirements.txt` | 全部 `==` 锁版本 + 显式传递依赖；PySide6 只列 `Essentials`+`shiboken6`（不引 WebEngine/Pdf/Addons）；移除未引用的 `onnx` / `scikit-image` / `lmdb`；OpenCV 换成 headless 版。 |
 | 构建脚本 | `backend/tools/makedist.py` | QPT 打包后执行 `_post_process()`：①用 System32 的新版 VC++ 运行库覆盖 QPT 内置旧 DLL（旧版会导致 onnxruntime "DLL 初始化例程失败"）；②剔除演示素材与 VideoSubFinder 的 Intel oneAPI 变体；③校验关键依赖的 wheel 已下载到 `opt/packages`（构建阶段 site-packages 尚未填充，不能作为校验依据）。**`opt/packages` 的 wheel 缓存不能删**——首次启动部署依赖它。**不要给 `CEM` 传 `ignore_dirs`**，否则触发 QPT 1.0b8 的 `self.ignore_dirs` 未初始化缺陷，打包立即失败。 |
-| 发布门禁 | `.github/workflows/build-windows.yml` | 生成 Release 后、上传前，用打包目录内的 `Python/python.exe` 运行 `backend/tools/release_smoke_test.py`，逐一 import 全部运行时依赖并确认 `DmlExecutionProvider` 可用；失败即中止 workflow，杜绝再次发布启动即崩溃的包。 |
+| 发布门禁 | `.github/workflows/build-windows.yml` | 生成 Release 后、上传前，设 `QPT_MODE=Debugging` 用打包目录内的 `Python/python.exe` 运行 `backend/tools/release_smoke_test.py`：它把 `opt/packages` 的 wheel 部署到系统临时目录（`--no-index --no-deps --target`），再在子进程 import 全部依赖并确认 `DmlExecutionProvider` 可用，结束后清理临时目录、不改动 Release 产物；失败即中止 workflow，杜绝再次发布启动即崩溃的包。**必须设 `QPT_MODE=Debugging`**（含 "ing"），否则 QPT 的 `sitecustomize.py` 会因 `QPT_MODE=None` 抛 TypeError 或自动拉起 GUI。 |
 
 ### 仍建议后续推进
 
