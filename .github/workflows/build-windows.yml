@@ -15,6 +15,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write  # 创建 Release / Tag 所需；GITHUB_TOKEN 默认只读会导致 403
     steps:
     - uses: actions/checkout@v4
     - name: 读取 VERSION
@@ -79,7 +81,7 @@ jobs:
           mv vse-v${{ env.VERSION }}-windows.7z.001 vse-v${{ env.VERSION }}-windows.7z; fi
       shell: bash
     - name: Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         prerelease: true
         tag_name: ${{ env.VERSION }}
