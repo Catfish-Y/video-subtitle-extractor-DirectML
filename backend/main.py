@@ -966,7 +966,7 @@ class SubtitleExtractor:
         """
         对图片进行统一化处理
         """
-        # 利用image对图像大小重新设置, Image.ANTIALIAS为高质量的
+        # 利用 image 对图像大小重新设置，使用 LANCZOS 高质量重采样
         image = image.resize(size, Image.Resampling.LANCZOS)
         if greyscale:
             # 将图片转换为L模式，其为灰度图，其每个像素用8个bit表示
