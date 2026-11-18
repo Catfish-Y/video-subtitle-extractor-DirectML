@@ -2453,6 +2453,15 @@ flowchart TD
 | **识别批量化** | `_rec_predict_batch()` 按批大小批量推理，减少逐框调用开销。 |
 | **单一安装包** | 假定所有 GPU 支持 DX12，取消 CPU-only 版本：`requirements.txt` 直接用 `onnxruntime-directml`（自带 CPU + DML 双 provider），删除 `requirements_directml.txt`；workflow 收敛为唯一 `build-windows.yml`，产物不再区分 CPU/DML。 |
 | **构建收敛** | workflow 从 5 个减为 1 个；移除 `pip freeze` 覆盖 requirements.txt 的问题。 |
+| **依赖全量锁定（QPT 兼容）** | `requirements.txt` 由 `>=`/`~=` 改为 32 个 `==` 精确版本，并显式列出全部传递依赖。根因：QPT 1.0b8 的 `flatten_requirements()` → `search_dep()` → `pkg.requires()` 在新版 pip 下抛 TypeError，构建时的 sed 补丁捕获后 `continue`，导致 QPT 完全不解析传递依赖；旧写法漏掉 `shiboken6` / `PySide6-Essentials` / `qframelesswindow` / `rapidfuzz` / `urllib3` 等，打包成功但启动即 `ImportError`。 |
+
+### Release 打包链路（当前实现）
+
+| 环节 | 文件 | 说明 |
+|---|---|---|
+| 依赖清单 | `requirements.txt` | 全部 `==` 锁版本 + 显式传递依赖；PySide6 只列 `Essentials`+`shiboken6`（不引 WebEngine/Pdf/Addons）；移除未引用的 `onnx` / `scikit-image` / `lmdb`；OpenCV 换成 headless 版。 |
+| 构建脚本 | `backend/tools/makedist.py` | QPT 打包后执行 `_post_process()`：①用 System32 的新版 VC++ 运行库覆盖 QPT 内置旧 DLL（旧版会导致 onnxruntime "DLL 初始化例程失败"）；②剔除演示素材与 VideoSubFinder 的 Intel oneAPI 变体；③校验关键包已落盘。**`opt/packages` 的 wheel 缓存不能删**——首次启动部署依赖它。 |
+| 发布门禁 | `.github/workflows/build-windows.yml` | 生成 Release 后、上传前，用打包目录内的 `Python/python.exe` 运行 `backend/tools/release_smoke_test.py`，逐一 import 全部运行时依赖并确认 `DmlExecutionProvider` 可用；失败即中止 workflow，杜绝再次发布启动即崩溃的包。 |
 
 ### 仍建议后续推进
 

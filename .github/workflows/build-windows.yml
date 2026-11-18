@@ -1,6 +1,6 @@
 name: Build Windows (CPU + DirectML)
 
-on: 
+on:
   push:
     branches:
       - '**'
@@ -11,7 +11,6 @@ on:
         required: false
         default: false
 
-
 jobs:
   build:
     runs-on: windows-latest
@@ -21,24 +20,17 @@ jobs:
     - uses: actions/checkout@v7
     - name: 读取 VERSION
       id: version
+      shell: bash
       run: |
         VERSION=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' backend/config.py)
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-      shell: bash
-    # - name: 检查 tag 是否已存在
-    #   run: |
-    #     TAG_NAME="${VERSION}"
-    #     if git ls-remote --tags origin | grep -q "refs/tags/$TAG_NAME"; then
-    #       echo "Tag $TAG_NAME 已存在，发布中止"
-    #       exit 1
-    #     fi
-    #   shell: bash
     - uses: actions/setup-python@v7
       with:
         python-version: '3.12'
-        cache: 'pip' # caching pip dependencies
+        cache: 'pip'
     - run: pip install -r requirements.txt
+    # QPT 1.0b8 已停更：新版 pip 的 requires() 会抛 TypeError，需兼容补丁
     - run: pip install QPT==1.0b8 setuptools
     - name: 获取 site-packages 路径
       shell: bash
@@ -50,18 +42,27 @@ jobs:
         echo "SITE_PACKAGES_UNIX=$SITE_PACKAGES_UNIX" >> $GITHUB_ENV
         echo "SITE_PACKAGES=$SITE_PACKAGES" >> $GITHUB_ENV
     - name: 修复QPT内部错误
-      run: sed -i '98c\        try:\n            dep = pkg.requires()\n        except TypeError:\n            continue' ${SITE_PACKAGES_UNIX}/qpt/kernel/qpackage.py
       shell: bash
+      run: sed -i '98c\        try:\n            dep = pkg.requires()\n        except TypeError:\n            continue' ${SITE_PACKAGES_UNIX}/qpt/kernel/qpackage.py
     - name: Start SSH via tmate
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
       uses: mxschmitt/action-tmate@v3
-    - run: |
+    - name: 构建绿色版
+      shell: bash
+      run: |
         python backend/tools/makedist.py && \
         mv ../vse_out ./vse_out && \
         cp ./vse_out/Debug/Debug-进入虚拟环境.cmd ./vse_out/Release/
       env:
         QPT_Action: "True"
+    # 关键关卡：用打包后的解释器验证所有依赖可导入、DML 可用。
+    # 该步骤失败会直接中止工作流，杜绝再次发布 "启动即崩溃" 的包。
+    - name: 验证 Release 运行环境
       shell: bash
+      run: |
+        cd vse_out/Release
+        ROOT="$(pwd -W)"
+        ./Python/python.exe -S -c "import sys, runpy; sys.path.insert(0, r'$ROOT/Lib/site-packages'); runpy.run_path(r'$ROOT/resources/backend/tools/release_smoke_test.py', run_name='__main__')"
     - name: 上传 Debug 文件夹到 Artifacts
       uses: actions/upload-artifact@v7
       with:
@@ -73,13 +74,12 @@ jobs:
         name: vse-v${{ env.VERSION }}-windows-release
         path: vse_out/Release/
     - name: 打包 Release 文件夹
+      shell: bash
       run: |
         cd vse_out/Release
         7z a -t7z -mx=9 -m0=LZMA2 -ms=on -mfb=64 -md=32m -mmt=on -v1888m vse-v${{ env.VERSION }}-windows.7z * && \
-        # 检测是否只有一个分卷
         if [ -f vse-v${{ env.VERSION }}-windows.7z.001 ] && [ ! -f vse-v${{ env.VERSION }}-windows.7z.002 ]; then \
           mv vse-v${{ env.VERSION }}-windows.7z.001 vse-v${{ env.VERSION }}-windows.7z; fi
-      shell: bash
     - name: Release
       uses: softprops/action-gh-release@v3
       with:
@@ -89,4 +89,3 @@ jobs:
         name: 硬字幕提取器 v${{ env.VERSION }}
         files: |
           vse_out/Release/vse-v${{ env.VERSION }}-windows.7z*
-    
