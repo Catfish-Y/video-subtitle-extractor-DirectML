@@ -36,10 +36,11 @@ jobs:
       with:
         python-version: '3.12'
         cache: 'pip' # caching pip dependencies
-    - run: pip install paddlepaddle==3.0.0
     - run: pip install -r requirements.txt
-    - run: pip install -r requirements_directml.txt
-    - run: pip freeze > requirements.txt
+    - name: 切换到 DirectML 版 onnxruntime
+      run: |
+        pip uninstall -y onnxruntime
+        pip install -r requirements_directml.txt
     - run: pip install QPT==1.0b8 setuptools
     - name: 获取 site-packages 路径
       shell: bash

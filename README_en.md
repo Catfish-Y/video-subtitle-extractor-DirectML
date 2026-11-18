@@ -72,9 +72,7 @@ Key features:
 
 > **Please submit any improvement suggestions in ISSUES and DISCUSSIONS**
 
-> NVIDIA provides a list of compute capabilities for each GPU model. You can refer to [CUDA GPUs](https://developer.nvidia.com/cuda-gpus) to check which CUDA version is suitable for your GPU.
 
-> NVIDIA 50-series GPUs require CUDA 12.8.0 or above, but Paddle 3.3.1 does not yet support it, so the DirectML universal version is recommended.
 
 **Recognition Mode Selection**:
 
@@ -141,74 +139,51 @@ cd <source-code-directory>
 
 #### 4. Install the Appropriate Runtime Environment
 
-This project supports four runtime modes: CUDA (NVIDIA GPU acceleration), CPU (no GPU), DirectML (AMD, Intel GPU/APU acceleration), and ONNX.
+This project supports **Windows** only, with two execution backends: **CPU** and
+**DirectML (DML)**. OCR uniformly uses ONNX Runtime with official **PP-OCRv6** ONNX
+models and does not depend on PaddlePaddle.
 
-##### (1) CUDA (NVIDIA GPU Users)
+##### (1) CPU backend (no GPU or GPU not used)
 
-> Please ensure your NVIDIA GPU driver supports the selected CUDA version.
+```shell
+pip install -r requirements.txt
+```
 
-- Recommended: CUDA 11.8 with cuDNN 8.6.0
+##### (2) DirectML backend (AMD / Intel / NVIDIA GPU acceleration)
 
-- Install CUDA:
-  - Windows: [CUDA 11.8 Download](https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_522.06_windows.exe)
-  - Linux:
-    ```shell
-    wget https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
-    sudo sh cuda_11.8.0_520.61.05_linux.run
-    ```
-  - MacOS does not support CUDA
-
-- Install cuDNN (CUDA 11.8 requires cuDNN 8.6.0):
-  - [Windows cuDNN 8.6.0 Download](https://developer.download.nvidia.cn/compute/redist/cudnn/v8.6.0/local_installers/11.8/cudnn-windows-x86_64-8.6.0.163_cuda11-archive.zip)
-  - [Linux cuDNN 8.6.0 Download](https://developer.download.nvidia.cn/compute/redist/cudnn/v8.6.0/local_installers/11.8/cudnn-linux-x86_64-8.6.0.163_cuda11-archive.tar.xz)
-  - Please refer to NVIDIA official documentation for installation instructions
-
-- Install PaddlePaddle GPU version (CUDA 11.8):
+- Uses official PP-OCRv6 ONNX models with ONNX Runtime's `DmlExecutionProvider`.
+  NVIDIA GPUs also go through DML — no CUDA/cuDNN installation needed.
+- Uninstall the CPU build of onnxruntime first, then install the DirectML build
+  (they cannot coexist):
   ```shell
-  pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
   pip install -r requirements.txt
-  ```
-
-##### (2) DirectML (AMD, Intel GPU/APU Users)
-
-- Suitable for AMD/NVIDIA/Intel GPUs on Windows
-- The DirectML backend uses official **PP-OCRv5 ONNX models** and runs inference
-  through ONNX Runtime's `DmlExecutionProvider` (PaddlePaddle itself has no DirectML
-  support). It is enabled automatically when a DML provider is detected, and falls
-  back to CPU otherwise — no manual switch required.
-- On first run, ONNX models are downloaded from the official Baidu mirror to
-  `~/.paddleocr/onnx/` (not bundled in the repo). Set `VSE_ONNX_MODEL_DIR` to override.
-- Install:
-  ```shell
-  pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-  pip install -r requirements.txt
+  pip uninstall -y onnxruntime
   pip install -r requirements_directml.txt
   ```
-  > Note: `onnxruntime-directml` 1.24.4+ is required (1.20.1 fails to install on Python 3.13).
+  > `onnxruntime-directml` 1.24.4+ is required (1.20.1 cannot be installed on Python 3.13).
 
-##### (3) Other ONNX execution providers (macOS / Linux, experimental)
+##### (3) Model download and tiers
 
-- Please do not submit issues if using this deployment method
-- For ONNX providers other than DirectML (CoreML / ROCm / OpenVINO, etc.), install
-  the matching `onnxruntime-*` package. `dml_ocr.py` prefers
-  `DmlExecutionProvider` by default; pass an explicit `providers` argument to
-  `DmlOcrRecogniser` to use another one (e.g. `['CoreMLExecutionProvider', 'CPUExecutionProvider']`).
-- Install the base environment then the provider you need:
-  ```shell
-  pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-  pip install -r requirements.txt
-  # See https://onnxruntime.ai/docs/execution-providers/ for provider-specific packages
-  # e.g. Apple Silicon: pip install onnxruntime-coreml onnx
+- Two model tiers (orthogonal to the frame-extraction mode, freely combinable in the GUI):
+  - **Light**: `PP-OCRv6_small_det` + `PP-OCRv6_tiny_rec` — speed first;
+  - **Precise**: `PP-OCRv6_small_det` + `PP-OCRv6_small_rec` — accuracy first.
+- Models are downloaded on demand from the official Baidu mirror to
+  `~/.paddleocr/onnx/` (not bundled), overridable via `VSE_ONNX_MODEL_DIR`.
+  On startup the GUI checks model availability: if any are missing it shows which
+  ones, the download URL and target directory, plus a "Download Missing Models" button.
+- Manual download:
   ```
-
-##### (4) CPU Mode (No GPU Acceleration)
-
-- Suitable for systems without a GPU or when GPU usage is not desired
-- Install the CPU version of PaddlePaddle directly:
-  ```shell
-  pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-  pip install -r requirements.txt
+  https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/<model>.tar
   ```
+  Extract into `~/.paddleocr/onnx/` so each model has `<name>/inference.onnx` and `inference.yml`.
+
+##### (4) Backend and device selection in the GUI
+
+The "Basic Settings" page offers:
+- **OCR Backend**: `auto` (DML when available), `cpu`, `dml`;
+- **Model Tier**: Light / Precise;
+- **DML Device**: pick a detected GPU or auto-select;
+- **Hardware Acceleration** master switch: off forces CPU.
 
 #### 5. Run the Program
 
@@ -226,9 +201,11 @@ python ./backend/main.py
 
 ## FAQ
 
-#### 1. Program not working / no results / CUDA and cuDNN issues
+#### 1. Program not working / no results
 
-Solution: Install the appropriate CUDA and cuDNN versions based on your GPU model and driver version.
+Solutions: On the Basic Settings page check the OCR backend and model status. If using
+DirectML, ensure `onnxruntime-directml` is installed (not the CPU build of `onnxruntime`)
+and use the "Download Missing Models" button if models are missing.
 
 #### 2. 7z file extraction error
 

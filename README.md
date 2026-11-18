@@ -71,9 +71,7 @@ Video-subtitle-extractor (VSE) 是一款将视频中的硬字幕提取为外挂�
 
 > **有任何改进意见请在ISSUES和DISCUSSION中提出**
 
-> NVIDIA官方提供了各GPU型号的计算能力列表，您可以参考链接: [CUDA GPUs](https://developer.nvidia.com/cuda-gpus) 查看你的GPU适合哪个CUDA版本
-
-> NVIDIA 50系显卡需要使用cuda12.8.0及以上版本, 但Paddle3.3.1目前仍未支持，所以建议使用Directml通用版本
+> NVIDIA / AMD / Intel 显卡统一走 DirectML 后端，无需安装 CUDA/cuDNN。
 
 **识别模式选择说明**：
 |    模式名称    | GPU | OCR模型尺寸 | 字幕检测引擎 | 备注 |
@@ -138,73 +136,48 @@ cd <源码所在目录>
 
 #### 4. 安装合适的运行环境
 
-本项目支持 CUDA（NVIDIA显卡加速）、CPU（无 GPU）、DirectML（AMD、Intel等GPU/APU加速）、ONNX四种运行模式
+本项目仅支持 **Windows**，提供两种执行后端：**CPU** 与 **DirectML（DML）**。
+OCR 统一使用 ONNX Runtime + 官方 **PP-OCRv6** ONNX 模型，不依赖 PaddlePaddle。
 
-##### (1) CUDA（NVIDIA 显卡用户）
+##### (1) CPU 后端（无 GPU 或不使用 GPU）
 
-> 请确保您的 NVIDIA 显卡驱动支持所选 CUDA 版本
+```shell
+pip install -r requirements.txt
+```
 
-- 推荐 CUDA 11.8，对应 cuDNN 8.6.0
+##### (2) DirectML 后端（AMD / Intel / NVIDIA GPU 通用加速）
 
-- 安装 CUDA：
-  - Windows：[CUDA 11.8 下载](https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_522.06_windows.exe)
-  - Linux：
-    ```shell
-    wget https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
-    sudo sh cuda_11.8.0_520.61.05_linux.run
-    ```
-  - MacOS 不支持 CUDA
-
-- 安装 cuDNN（CUDA 11.8 对应 cuDNN 8.6.0）：
-  - [Windows cuDNN 8.6.0 下载](https://developer.download.nvidia.cn/compute/redist/cudnn/v8.6.0/local_installers/11.8/cudnn-windows-x86_64-8.6.0.163_cuda11-archive.zip)
-  - [Linux cuDNN 8.6.0 下载](https://developer.download.nvidia.cn/compute/redist/cudnn/v8.6.0/local_installers/11.8/cudnn-linux-x86_64-8.6.0.163_cuda11-archive.tar.xz)
-  - 安装方法请参考 NVIDIA 官方文档
-
-- 安装 PaddlePaddle GPU 版本（CUDA 11.8）：
+- 使用官方 PP-OCRv6 ONNX 模型，通过 ONNX Runtime 的 `DmlExecutionProvider`
+  执行 GPU 推理。NVIDIA 显卡也走 DML，无需安装 CUDA/cuDNN。
+- 先卸载 CPU 版 onnxruntime，再装 DirectML 版（两者不能共存）：
   ```shell
-  pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
   pip install -r requirements.txt
-  ```
-
-##### (2) DirectML（AMD、Intel等GPU/APU加速卡用户）
-
-- 适用于 Windows 设备的 AMD/NVIDIA/Intel GPU
-- DirectML 后端使用官方 **PP-OCRv5 ONNX 模型**，通过 ONNX Runtime 的
-  `DmlExecutionProvider` 真正执行 GPU 推理（PaddlePaddle 本身不支持 DirectML）。
-  程序在检测到 DML provider 时自动启用，无需手动切换；不可用时回退 CPU。
-- 首次运行会自动从百度官方源下载 ONNX 模型到 `~/.paddleocr/onnx/`（不随仓库分发），
-  可通过环境变量 `VSE_ONNX_MODEL_DIR` 指定模型目录。
-- 安装步骤：
-  ```shell
-  pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-  pip install -r requirements.txt
+  pip uninstall -y onnxruntime
   pip install -r requirements_directml.txt
   ```
-  > 注意：`onnxruntime-directml` 需 1.24.4 及以上（1.20.1 在 Python 3.13 上无法安装）。
+  > `onnxruntime-directml` 需 1.24.4+（1.20.1 在 Python 3.13 上无法安装）。
 
-##### (3) 其它 ONNX 执行后端（macOS / Linux，实验性）
+##### (3) 模型下载与档位
 
-- 使用这个方式部署请勿反馈Issues
-- DirectML 之外的 ONNX 后端（CoreML / ROCm / OpenVINO 等）需要对应的
-  `onnxruntime-*` 包。`dml_ocr.py` 的 provider 列表默认优先
-  `DmlExecutionProvider`，如需改用其它后端，可在创建 `DmlOcrRecogniser` 时
-  通过 `providers` 参数显式指定（例如 `['CoreMLExecutionProvider', 'CPUExecutionProvider']`）。
-- 安装基础环境后按需安装对应执行提供程序：
-  ```shell
-  pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-  pip install -r requirements.txt
-  # 阅读文档 https://onnxruntime.ai/docs/execution-providers/ 选择匹配你设备的包
-  # 例如 Apple Silicon: pip install onnxruntime-coreml onnx
+- OCR 使用官方 PP-OCRv6 ONNX 模型，分为两个档位（与抽帧模式正交，可在 GUI 中自由组合）：
+  - **轻量档**：`PP-OCRv6_small_det` + `PP-OCRv6_tiny_rec`，速度优先；
+  - **精准档**：`PP-OCRv6_small_det` + `PP-OCRv6_small_rec`，准确度优先。
+- 模型从百度官方源按需下载到 `~/.paddleocr/onnx/`（不随仓库分发），可用环境变量
+  `VSE_ONNX_MODEL_DIR` 覆盖。GUI 启动时会检测模型是否齐全：缺失时会提示所需模型、
+  下载地址与存放目录，并提供「一键下载缺失模型」按钮。
+- 也可手动下载：
   ```
-
-##### (4) CPU 运行（无 GPU 加速）
-
-- 适用于没有 GPU 或不希望使用 GPU 的情况
-- 直接安装 CPU 版本 PaddlePaddle：
-  ```shell
-  pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-  pip install -r requirements.txt
+  https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/<模型名>.tar
   ```
+  将 tar 解压到 `~/.paddleocr/onnx/` 下，形成 `<模型名>/inference.onnx` 与 `inference.yml`。
+
+##### (4) GUI 中的后端与设备选择
+
+「基础设置」页提供：
+- **OCR 后端**：`auto`（有 DML 设备时自动用 DML）、`cpu`、`dml`；
+- **模型档位**：轻量 / 精准；
+- **DML 设备**：选择具体的 GPU（程序启动时枚举）或自动选择；
+- **硬件加速总开关**：关闭时强制使用 CPU。
 
 #### 5. 运行程序
 
@@ -222,9 +195,10 @@ python ./backend/main.py
 
 ## 常见问题与解决方案
 
-#### 1. 运行不正常/没有结果/cuda及cudnn问题
+#### 1. 运行不正常/没有结果
 
-解决方案：根据自己的显卡型号、显卡驱动版本，安装对应的cuda与cudnn
+解决方案：在「基础设置」页检查 OCR 后端与模型状态。使用 DirectML 时请确认安装的是
+`onnxruntime-directml`（而非 CPU 版 `onnxruntime`）；若模型缺失，点击「一键下载缺失模型」。
 
 #### 2. 7z文件解压错误
 
