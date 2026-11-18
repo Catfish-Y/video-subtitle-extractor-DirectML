@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: write  # 创建 Release / Tag 所需；GITHUB_TOKEN 默认只读会导致 403
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: 读取 VERSION
       id: version
       run: |
@@ -34,7 +34,7 @@ jobs:
     #       exit 1
     #     fi
     #   shell: bash
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v7
       with:
         python-version: '3.12'
         cache: 'pip' # caching pip dependencies
@@ -63,12 +63,12 @@ jobs:
         QPT_Action: "True"
       shell: bash
     - name: 上传 Debug 文件夹到 Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: vse-v${{ env.VERSION }}-windows-debug
         path: vse_out/Debug/
     - name: 上传 Release 文件夹到 Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: vse-v${{ env.VERSION }}-windows-release
         path: vse_out/Release/
@@ -81,7 +81,7 @@ jobs:
           mv vse-v${{ env.VERSION }}-windows.7z.001 vse-v${{ env.VERSION }}-windows.7z; fi
       shell: bash
     - name: Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         prerelease: true
         tag_name: ${{ env.VERSION }}
