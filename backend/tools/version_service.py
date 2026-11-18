@@ -36,8 +36,20 @@ class VersionService:
                 response = requests.get(url, headers=headers, timeout=5, allow_redirects=True, proxies=proxies)
                 response.raise_for_status()
                 
-                # 解析版本
-                version = response.json()['tag_name']  # type:str
+                # 解析版本：/releases/latest 返回单个对象，/releases 返回列表
+                # （后者用于兜底 prerelease，因为 latest 端点会跳过预发布版）
+                data = response.json()
+                if isinstance(data, list):
+                    # 优先正式版，没有正式版时再取预发布版（跳过 draft）
+                    candidates = [r for r in data if not r.get('draft')]
+                    entry = next((r for r in candidates if not r.get('prerelease')), None)
+                    if entry is None and candidates:
+                        entry = candidates[0]
+                    if entry is None:
+                        continue
+                    version = entry['tag_name']  # type: str
+                else:
+                    version = data['tag_name']  # type: str
                 match = self.version_pattern.search(version)
                 if not match:
                     continue  # 如果版本格式不匹配，尝试下一个API

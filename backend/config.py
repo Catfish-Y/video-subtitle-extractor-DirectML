@@ -8,12 +8,15 @@ import configparser
 
 # 项目版本号
 VERSION = "3.0.0"
-PROJECT_HOME_URL = "https://github.com/YaoFANGUK/video-subtitle-extractor"
+PROJECT_HOME_URL = "https://github.com/Catfish-Y/video-subtitle-extractor-DirectML"
 PROJECT_ISSUES_URL = PROJECT_HOME_URL + "/issues"
 PROJECT_RELEASES_URL = PROJECT_HOME_URL + "/releases"
 PROJECT_UPDATE_URLS = [
-    "https://api.github.com/repos/YaoFANGUK/video-subtitle-extractor/releases/latest",
-    "https://accelerate.xdow.net/api/repos/YaoFANGUK/video-subtitle-extractor/releases/latest",
+    # /releases/latest 会跳过 prerelease/draft；3.0.0 当前为预发布版，
+    # 故优先用 /releases 列表端点（由 version_service 优先取正式版、否则取预发布版）。
+    "https://api.github.com/repos/Catfish-Y/video-subtitle-extractor-DirectML/releases",
+    "https://api.github.com/repos/Catfish-Y/video-subtitle-extractor-DirectML/releases/latest",
+    "https://accelerate.xdow.net/api/repos/Catfish-Y/video-subtitle-extractor-DirectML/releases/latest",
 ] 
 # 硬件加速选项开关
 HARDWARD_ACCELERATION_OPTION = True
