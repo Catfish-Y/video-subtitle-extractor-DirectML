@@ -60,9 +60,12 @@ jobs:
     # 必须设 QPT_MODE=Debugging，否则 QPT 的 sitecustomize 会尝试自动部署并拉起 GUI。
     - name: 验证 Release 运行环境
       shell: bash
+      env:
+        QPT_MODE: Debugging
+        PYTHONIOENCODING: utf-8
       run: |
         cd vse_out/Release
-        QPT_MODE=Debugging ./Python/python.exe resources/backend/tools/release_smoke_test.py
+        ./Python/python.exe resources/backend/tools/release_smoke_test.py
     - name: 上传 Debug 文件夹到 Artifacts
       uses: actions/upload-artifact@v7
       with:

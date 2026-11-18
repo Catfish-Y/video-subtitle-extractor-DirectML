@@ -24,6 +24,14 @@ import subprocess
 import sys
 import tempfile
 
+# Windows 下打包解释器的 stdout 默认用 charmap 编码，打印中文日志会抛
+# UnicodeEncodeError。强制改为 UTF-8，保证本脚本所有 print 都能输出。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 MODULES = (
     "cv2",
     "numpy",
