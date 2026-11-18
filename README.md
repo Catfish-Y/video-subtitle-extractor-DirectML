@@ -6,88 +6,9 @@
 
 ![License](https://img.shields.io/badge/License-Apache%202-red.svg)
 ![python version](https://img.shields.io/badge/Python-3.12+-blue.svg)
-![support os](https://img.shields.io/badge/OS-Windows/macOS/Linux-green.svg)  
+![support os](https://img.shields.io/badge/OS-Windows-green.svg)  
 
-Video-subtitle-extractor (VSE) 是一款将视频中的硬字幕提取为外挂字幕文件(srt格式)的软件
-主要实现了以下功能：
-
-- 提取视频中的关键帧
-- 检测视频帧中文本的所在位置
-- 识别视频帧中文本的内容
-- 过滤非字幕区域的文本
-- 去除水印、台标文本、原视频硬字幕，可配合：[video-subtitle-remover (VSR) ](https://github.com/YaoFANGUK/video-subtitle-remover/tree/main)
-- 去除重复字幕行，生成srt字幕文件/txt文本文件
-- 支持视频字幕**批量提取**
-- 多语言：支持**简体中文（中英双语）**、**繁体中文**、**英文**、**日语**、**韩语**、**越南语**、**阿拉伯语**、**法语**、**德语**、**俄语**、**西班牙语**、**葡萄牙语**、**意大利语**等**87种**语言的字幕提取
-- 多模式：
-  - **快速**：（推荐）使用轻量模型，快速提取字幕，可能丢少量字幕、存在少量错别字
-  - **自动**：（推荐）自动判断模型，CPU下使用轻量模型；GPU下使用精准模型，提取字幕速度较慢，可能丢少量字幕、几乎不存在错别字
-  - **精准**：（不推荐）使用精准模型，GPU下逐帧检测，不丢字幕，几乎不存在错别字，但速度**非常慢**
-
-> 请优先使用快速/自动模式，如果前两种模式存在较多丢字幕轴情况时，再使用精准模式
- 
-<p style="text-align:center;"><img src="design/demo.png" alt="demo.png"/></p>
-
-**项目特色**：
-
-- 采用本地进行OCR识别，无需设置调用任何API，不需要接入百度、阿里等在线OCR服务即可本地完成文本识别
-- 支持GPU加速，GPU加速后可以获得更高的准确率与更快的提取速度
-
-**使用说明**：
-
-- 有使用问题请加群讨论，QQ群：210150985（已满）、806152575（已满）、816881808（已满）、295894827
-
-- 点击【打开】后选择视频文件，调整字幕区域，点击【运行】
-  - 单文件提取：打开文件的时候选择**单个**视频
-  - **批量提取**：打开文件的时候选择**多个**视频，确保每个视频的分辨率、字幕区域保持一致
-
-- 去除水印文本/替换特定文本：
-> 如果视频中出现特定的文本需要删除，或者特定的文本需要替换，可以编辑 ``backend/configs/typoMap.json``文件，加入你要替换或去除的内容
-
-```json
-{
-	"l'm": "I'm",
-	"l just": "I just",
-	"Let'sqo": "Let's go",
-	"Iife": "life",
-	"威筋": "威胁",
-  	"性感荷官在线发牌": ""
-}
-```
-
-> 这样就可以把文本中出现的所有“威筋”替换为“威胁”，所有的“性感荷官在线发牌”文本删除
-
-- 视频以及程序路径请**不要带中文和空格**，否则可能出现未知错误！！！
-
- > 如：以下存放视频和代码的路径都不行
- >
- > D:\下载\vse\运行程序.exe（路径含中文）
- >
- > E:\study\kaoyan\sanshang youya.mp4 （路径含空格） 
-
-- 直接下载压缩包解压运行，如果不能运行再按照下面的教程，尝试源码安装conda环境运行
-
-**下载地址**：<a href="https://github.com/YaoFANGUK/video-subtitle-extractor/releases"> Release </a>
-
-> **有任何改进意见请在ISSUES和DISCUSSION中提出**
-
-> NVIDIA / AMD / Intel 显卡统一走 DirectML 后端，无需安装 CUDA/cuDNN。
-
-**识别模式选择说明**：
-|    模式名称    | GPU | OCR模型尺寸 | 字幕检测引擎 | 备注 |
-|---------------|-----|---------|------|------|
-|    快速        | 有/无 | 迷你  | VideoSubFinder | |
-|    自动  | 有| 大  | VideoSubFinder |  推荐   |
-|    自动  | 无| 迷你  | VideoSubFinder |  推荐   |
-|    精准        | 有/无| 大  | VSE | 非常慢 |
-> Windows/Linux/MacOS环境下字幕检测引擎都是VideoSubFinder
-
-## 演示
-
-- GUI版：[点击查看GPU版本源码运行的安装教程 👈](https://www.bilibili.com/video/bv11L4y1Y7Tj)
-
-<p style="text-align:center;"><img src="https://github.com/YaoFANGUK/video-subtitle-extractor/raw/main/design/demo.gif" alt="demo.gif"/></p>
-
+Video-subtitle-extractor (VSE) 是一款将视频中的硬字幕提取为外挂字幕文件(srt格式)的软件，本仓库fork自[YaoFANGUK](https://github.com/YaoFANGUK/video-subtitle-extractor)，并根据自己的实际需求进行了大量修改。
 
 ## 源码使用说明
 
@@ -199,7 +120,3 @@ python ./backend/main.py
 #### 2. 7z文件解压错误
 
 解决方案：升级7-zip解压程序到最新版本
-
-## 赞助
-<img src="https://github.com/YaoFANGUK/video-subtitle-extractor/raw/main/design/sponsor.png" width="600">
-
