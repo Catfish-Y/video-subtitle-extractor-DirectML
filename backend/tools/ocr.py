@@ -9,8 +9,10 @@ from backend.tools.paddle_model_config import PaddleModelConfig
 class OcrRecogniser:
     def __init__(self):
         self.recogniser = None
-        # 占位，应该由main.py初始化
-        self.hardware_accelerator = HardwareAccelerator()
+        # 使用单例，避免 new 出来的实例未初始化导致加速状态丢失
+        self.hardware_accelerator = HardwareAccelerator.instance()
+        # 是否运行在 DirectML/ONNX 后端
+        self.use_dml = False
 
     @staticmethod
     def y_round(y):
@@ -24,6 +26,10 @@ class OcrRecogniser:
     def predict(self, image):
         if not self.recogniser:
             self.recogniser = self.init_model()
+
+        # DirectML/ONNX 后端走独立实现，输出 (dt_box, rec_res) 与下方逻辑互斥
+        if self.use_dml:
+            return self.recogniser.predict(image)
 
         # PaddleOCR 3.x: 使用 predict_iter 获取结果
         results = list(self.recogniser.predict_iter(image))
@@ -84,6 +90,20 @@ class OcrRecogniser:
 
     def init_model(self):
         model_config = PaddleModelConfig(self.hardware_accelerator)
+
+        # PaddleOCR 只支持 gpu:0/cpu，无法使用 DirectML。
+        # 当检测到 ONNX 加速 provider（如 DmlExecutionProvider）且无 CUDA 时，
+        # 切换到自研的 ONNX Runtime 后端，真正走 DirectML 推理；失败则回退 CPU。
+        if (not self.hardware_accelerator.has_cuda()
+                and self.hardware_accelerator.onnx_providers):
+            try:
+                from backend.tools.dml_ocr import DmlOcrRecogniser
+                recogniser = DmlOcrRecogniser()
+                self.use_dml = True
+                return recogniser
+            except Exception as e:
+                print(f"[DirectML] 初始化失败，回退 PaddlePaddle/CPU: {e}")
+                self.use_dml = False
 
         # PaddleOCR 3.x 使用 device 参数替代 use_gpu
         if self.hardware_accelerator.has_cuda():
