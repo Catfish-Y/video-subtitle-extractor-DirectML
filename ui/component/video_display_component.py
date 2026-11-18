@@ -635,7 +635,7 @@ class VideoDisplayComponent(QWidget):
                 self.selections_changed.emit(self.selection_rects)
             
             self.is_drawing = False
-            self.selection_rect = (0, 0, 0, 0)  # 重置为空选区
+            self.selection_rect = SubtitleArea(0, 0, 0, 0)  # 重置为空选区
         elif self.resize_edge and self.active_selection_index >= 0:
             # 标准化选择框
             rect = self.selection_rects[self.active_selection_index]
@@ -719,7 +719,7 @@ class VideoDisplayComponent(QWidget):
     def set_selection_rects(self, rects):
         """设置选择框"""
         self.selection_rects = rects
-        self.selection_rect = rects[-1] if rects else QRect()
+        self.selection_rect = rects[-1] if rects else SubtitleArea(0, 0, 0, 0)
         self.active_selection_index = len(rects) - 1
         self.update_preview_with_rect()
     

@@ -380,7 +380,8 @@ class HomeInterface(QWidget):
                             # 更新任务状态为失败
                             if self.current_processing_task_index >= 0:
                                 self.task_list_component.update_task_status(self.current_processing_task_index, TaskStatus.FAILED)
-                            break
+                            # 单个任务失败不应终止整个批量队列，标记失败后继续处理下一个
+                            continue
                         finally:
                             if self.video_cap:
                                 self.video_cap.release()
@@ -601,6 +602,8 @@ class HomeInterface(QWidget):
             for path in reversed(files_loaded):
                 # 添加到任务列表
                 self.task_list_component.add_task(path)
+            if not files_loaded:
+                return
             index = max(0, self.task_list_component.find_task_index_by_path(path))
             self.task_list_component.select_task(index)
 

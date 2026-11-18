@@ -108,92 +108,95 @@ class SubtitleExtractor:
         # 记录开始运行的时间
         start_time = time.time()
         self.lock.acquire()
-        # 重置进度条
-        self.update_progress(ocr=0, frame_extract=0, post=0)
-        self.append_output('-----------------------------')
-        # 打印识别语言与识别模式
-        self.append_output(f"  {tr['Main']['RecSubLang']}：{config.language.value}  |  {tr['Main']['RecMode']}：{config.mode.value}")
-        # 如果使用GPU加速，则打印GPU加速提示
-        if self.hardware_accelerator.has_accelerator():
-            self.append_output(f"  {tr['Main']['AcceleratorON'].format(self.hardware_accelerator.accelerator_name)}")
+        try:
+            # 重置进度条
+            self.update_progress(ocr=0, frame_extract=0, post=0)
+            self.append_output('-----------------------------')
+            # 打印识别语言与识别模式
+            self.append_output(f"  {tr['Main']['RecSubLang']}：{config.language.value}  |  {tr['Main']['RecMode']}：{config.mode.value}")
+            # 如果使用GPU加速，则打印GPU加速提示
+            if self.hardware_accelerator.has_accelerator():
+                self.append_output(f"  {tr['Main']['AcceleratorON'].format(self.hardware_accelerator.accelerator_name)}")
 
-        # 打印视频帧数与帧率
-        self.append_output(f"  {tr['Main']['FrameCount']}：{self.frame_count}"
-              f"  |  {tr['Main']['FrameRate']}：{self.fps}")
-        # 打印加载模型信息
-        self.append_output(f"  DET: {os.path.basename(self.model_config.DET_MODEL_PATH)}  |  REC: {os.path.basename(self.model_config.REC_MODEL_PATH)}")
-        self.append_output('-----------------------------')
-        # 打印视频帧提取开始提示
-        self.append_output(tr['Main']['StartProcessFrame'])
-        # 删除缓存
-        self.__delete_frame_cache()
-        # 若目录不存在，则创建文件夹
-        if not os.path.exists(self.frame_output_dir):
-            os.makedirs(self.frame_output_dir)
-        if not os.path.exists(self.subtitle_output_dir):
-            os.makedirs(self.subtitle_output_dir)
-        self.capture_frame_with_subtitle_area()
-        # 创建一个字幕OCR识别进程
-        subtitle_ocr_process = self.start_subtitle_ocr_async()
-        if self.sub_area is not None:
-            if platform.system() in ['Windows', 'Linux', 'Darwin']:
-                # 使用GPU且使用accurate模式时才开放此方法：
-                if self.hardware_accelerator.has_accelerator() and config.mode.value == 'accurate':
-                    self.extract_frame_by_det()
+            # 打印视频帧数与帧率
+            self.append_output(f"  {tr['Main']['FrameCount']}：{self.frame_count}"
+                  f"  |  {tr['Main']['FrameRate']}：{self.fps}")
+            # 打印加载模型信息
+            self.append_output(f"  DET: {os.path.basename(self.model_config.DET_MODEL_PATH)}  |  REC: {os.path.basename(self.model_config.REC_MODEL_PATH)}")
+            self.append_output('-----------------------------')
+            # 打印视频帧提取开始提示
+            self.append_output(tr['Main']['StartProcessFrame'])
+            # 删除缓存
+            self.__delete_frame_cache()
+            # 若目录不存在，则创建文件夹
+            if not os.path.exists(self.frame_output_dir):
+                os.makedirs(self.frame_output_dir)
+            if not os.path.exists(self.subtitle_output_dir):
+                os.makedirs(self.subtitle_output_dir)
+            self.capture_frame_with_subtitle_area()
+            # 创建一个字幕OCR识别进程
+            subtitle_ocr_process = self.start_subtitle_ocr_async()
+            if self.sub_area is not None:
+                if platform.system() in ['Windows', 'Linux', 'Darwin']:
+                    # accurate 模式始终使用 VSE 自研逐帧检测（README 标注「非常慢」）；
+                    # fast / auto 使用 VideoSubFinder。与 README 的模式说明保持一致。
+                    if config.mode.value == 'accurate':
+                        self.extract_frame_by_det()
+                    else:
+                        self.extract_frame_by_vsf()
                 else:
-                    self.extract_frame_by_vsf()
+                    self.extract_frame_by_fps()
             else:
                 self.extract_frame_by_fps()
-        else:
-            self.extract_frame_by_fps()
 
-        # 往字幕OCR任务队列中，添加OCR识别任务结束标志
-        # 任务格式为：(total_frame_count总帧数, current_frame_no当前帧, dt_box检测框, rec_res识别结果, 当前帧时间， subtitle_area字幕区域)
-        self.subtitle_ocr_task_queue.put((self.frame_count, -1, None, None, None, None))
-        # 等待子线程完成
-        subtitle_ocr_process.join()
-        # 打印完成提示
-        self.append_output(tr['Main']['FinishProcessFrame'])
-        self.append_output(tr['Main']['FinishFindSub'])
+            # 往字幕OCR任务队列中，添加OCR识别任务结束标志
+            # 任务格式为：(total_frame_count总帧数, current_frame_no当前帧, dt_box检测框, rec_res识别结果, 当前帧时间， subtitle_area字幕区域)
+            self.subtitle_ocr_task_queue.put((self.frame_count, -1, None, None, None, None))
+            # 等待子线程完成
+            subtitle_ocr_process.join()
+            # 打印完成提示
+            self.append_output(tr['Main']['FinishProcessFrame'])
+            self.append_output(tr['Main']['FinishFindSub'])
 
-        if self.sub_area is None:
-            self.append_output(tr['Main']['StartDetectWaterMark'])
-            # 询问用户视频是否有水印区域
-            user_input = input(tr['Main']['checkWaterMark']).strip()
-            if user_input == 'y':
-                self.filter_watermark()
-                self.append_output(tr['Main']['FinishDetectWaterMark'])
+            if self.sub_area is None:
+                self.append_output(tr['Main']['StartDetectWaterMark'])
+                # 询问用户视频是否有水印区域
+                user_input = self._safe_input(tr['Main']['checkWaterMark'])
+                if user_input == 'y':
+                    self.filter_watermark()
+                    self.append_output(tr['Main']['FinishDetectWaterMark'])
+                else:
+                    self.append_output('-----------------------------')
+
+            if self.sub_area is None:
+                self.append_output(tr['Main']['StartDeleteNonSub'])
+                self.filter_scene_text()
+                self.append_output(tr['Main']['FinishDeleteNonSub'])
+
+            self.update_progress(post=20)
+
+            # 打印开始字幕生成提示
+            self.append_output(tr['Main']['StartGenerateSub'])
+            # 判断是否使用了vsf提取字幕
+            if self.use_vsf:
+                # 如果使用了vsf提取字幕，则使用vsf的字幕生成方法
+                self.generate_subtitle_file_vsf()
             else:
-                self.append_output('-----------------------------')
+                # 如果未使用vsf提取字幕，则使用常规字幕生成方法
+                self.generate_subtitle_file()
 
-        if self.sub_area is None:
-            self.append_output(tr['Main']['StartDeleteNonSub'])
-            self.filter_scene_text()
-            self.append_output(tr['Main']['FinishDeleteNonSub'])
+            self.update_progress(post=90)
 
-        self.update_progress(post=20)
-
-        # 打印开始字幕生成提示
-        self.append_output(tr['Main']['StartGenerateSub'])
-        # 判断是否使用了vsf提取字幕
-        if self.use_vsf:
-            # 如果使用了vsf提取字幕，则使用vsf的字幕生成方法
-            self.generate_subtitle_file_vsf()
-        else:
-            # 如果未使用vsf提取字幕，则使用常规字幕生成方法
-            self.generate_subtitle_file()
-
-        self.update_progress(post=90)
-
-        if config.wordSegmentation.value:
-            reformat.execute(self.subtitle_output_path, config.language.value)
-        self.append_output(tr['Main']['FinishGenerateSub'], f"{round(time.time() - start_time, 2)}s")
-        self.append_output('-----------------------------')
-        self.update_progress(ocr=100, frame_extract=100, post=100)
-        self.isFinished = True
-        # 删除缓存文件
-        self.empty_cache()
-        self.lock.release()
+            if config.wordSegmentation.value:
+                reformat.execute(self.subtitle_output_path, config.language.value)
+            self.append_output(tr['Main']['FinishGenerateSub'], f"{round(time.time() - start_time, 2)}s")
+            self.append_output('-----------------------------')
+            self.update_progress(ocr=100, frame_extract=100, post=100)
+            self.isFinished = True
+            # 删除缓存文件
+            self.empty_cache()
+        finally:
+            self.lock.release()
         if config.generateTxt.value:
             self.srt2txt(self.subtitle_output_path)
 
@@ -560,8 +563,8 @@ class SubtitleExtractor:
 
         area_num = ['E', 'D', 'C', 'B', 'A']
         for watermark_area in watermark_areas:
-            user_input = input(f"{area_num.pop()}{str(watermark_area)} "
-                               f"{tr['Main']['QuestionDelete']}").strip()
+            user_input = self._safe_input(f"{area_num.pop()}{str(watermark_area)} "
+                               f"{tr['Main']['QuestionDelete']}")
             if user_input == 'y' or user_input == '\n':
                 with open(self.raw_subtitle_path, mode='r+', encoding='utf-8') as f:
                     content = f.readlines()
@@ -607,7 +610,7 @@ class SubtitleExtractor:
         cv2.imwrite(sample_frame_file_path, sample_frame)
         self.append_output(f"{tr['Main']['CheckSubArea']} {sample_frame_file_path}")
 
-        user_input = input(f"{(ymin, ymax)} {tr['Main']['DeleteNoSubArea']}").strip()
+        user_input = self._safe_input(f"{(ymin, ymax)} {tr['Main']['DeleteNoSubArea']}")
         if user_input == 'y' or user_input == '\n':
             with open(self.raw_subtitle_path, mode='r+', encoding='utf-8') as f:
                 content = f.readlines()
@@ -864,7 +867,7 @@ class SubtitleExtractor:
         # 滑动窗口：xmin已排序，只要xmin差值超过容忍度就移动左边界
         left = 0
         for right in range(n):
-            while left < right and indexed[right][1][0] - indexed[left][1][0] >= config.tolerantPixelX:
+            while left < right and indexed[right][1][0] - indexed[left][1][0] >= config.tolerantPixelX.value:
                 left += 1
             # 检查窗口内所有元素与当前元素是否相似
             for k in range(left, right):
@@ -953,10 +956,10 @@ class SubtitleExtractor:
         计算两个坐标是否相似，如果两个坐标点的xmin,xmax,ymin,ymax的差值都在像素点容忍度内
         则认为这两个坐标点相似
         """
-        return abs(coordinate1[0] - coordinate2[0]) < config.tolerantPixelX and \
-            abs(coordinate1[1] - coordinate2[1]) < config.tolerantPixelX and \
-            abs(coordinate1[2] - coordinate2[2]) < config.tolerantPixelY and \
-            abs(coordinate1[3] - coordinate2[3]) < config.tolerantPixelY
+        return abs(coordinate1[0] - coordinate2[0]) < config.tolerantPixelX.value and \
+            abs(coordinate1[1] - coordinate2[1]) < config.tolerantPixelX.value and \
+            abs(coordinate1[2] - coordinate2[2]) < config.tolerantPixelY.value and \
+            abs(coordinate1[3] - coordinate2[3]) < config.tolerantPixelY.value
 
     @staticmethod
     def __get_thum(image, size=(64, 64), greyscale=False):
@@ -964,7 +967,7 @@ class SubtitleExtractor:
         对图片进行统一化处理
         """
         # 利用image对图像大小重新设置, Image.ANTIALIAS为高质量的
-        image = image.resize(size, Image.ANTIALIAS)
+        image = image.resize(size, Image.Resampling.LANCZOS)
         if greyscale:
             # 将图片转换为L模式，其为灰度图，其每个像素用8个bit表示
             image = image.convert('L')
@@ -1063,6 +1066,19 @@ class SubtitleExtractor:
         """
         print(*args)
 
+    @staticmethod
+    def _safe_input(prompt):
+        """交互式提问的健壮封装。
+
+        GUI 的任务在独立子进程中运行，没有可用的 stdin；直接调用 input() 会
+        抛出 EOFError 并使整个提取任务失败。此处捕获该异常并返回空串，使程序
+        退化为「不执行需要人工确认的过滤步骤」，而 CLI 场景下交互行为保持不变。
+        """
+        try:
+            return input(prompt).strip()
+        except (EOFError, OSError):
+            return ''
+
     def add_progress_listener(self, listener):
         """
         添加进度监听器
@@ -1093,7 +1109,8 @@ class SubtitleExtractor:
             except Exception as e:
                 traceback.print_exc()
 
-    def manage_process(pid):
+    def manage_process(self, pid):
+        """上报外部进程 PID；GUI 侧会将其替换为回调，CLI 下保留空实现。"""
         pass
 
 if __name__ == '__main__':

@@ -113,8 +113,15 @@ class PaddleModelConfig:
         """
         v5_base = os.path.join(self.MODEL_BASE, 'V5')
 
-        # 快速模式优先使用 mobile 模型，否则使用 server 模型
-        if config.mode.value == 'fast':
+        # 使用轻量模型的条件：fast 模式，或 auto 模式但没有硬件加速。
+        # 与 README 一致：auto 在 CPU 下走轻量模型，GPU 下走精准模型。
+        has_accel = (self.hardware_accelerator is not None
+                     and self.hardware_accelerator.has_accelerator())
+        use_mobile = config.mode.value == 'fast' or (
+            config.mode.value == 'auto' and not has_accel
+        )
+
+        if use_mobile:
             det_model_path = os.path.join(v5_base, 'PP-OCRv5_mobile_det_infer')
             if not os.path.exists(det_model_path):
                 det_model_path = os.path.join(v5_base, 'PP-OCRv5_server_det_infer')
@@ -125,8 +132,8 @@ class PaddleModelConfig:
 
         det_model_name = self._read_model_name_from_yaml(det_model_path)
 
-        # 快速模式：中文(简/繁)、英文、日文使用通用 mobile 模型，其他语言使用对应的专用模型
-        if config.mode.value == 'fast' and self.REC_CHAR_TYPE in ('ch', 'chinese_cht', 'en', 'japan'):
+        # 轻量模型：中文(简/繁)、英文、日文使用通用 mobile 模型，其他语言使用对应的专用模型
+        if use_mobile and self.REC_CHAR_TYPE in ('ch', 'chinese_cht', 'en', 'japan'):
             rec_model_path = os.path.join(v5_base, 'PP-OCRv5_mobile_rec_infer')
             if os.path.exists(rec_model_path):
                 rec_model_name = self._read_model_name_from_yaml(rec_model_path)

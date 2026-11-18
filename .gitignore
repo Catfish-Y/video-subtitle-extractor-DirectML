@@ -347,8 +347,13 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+# 生成的字幕产物不入库；但保留项目自带的文本清单文件
 *.srt
 *.txt
+!requirements.txt
+!requirements_directml.txt
+!requirements_coreml.txt
 
 # End of https://www.toptal.com/developers/gitignore/api/intellij+all,python,pycharm+all,macos,windows
 /backend/models/V2/ch_det/inference.pdiparams
@@ -360,7 +365,8 @@ $RECYCLE.BIN/
 /test.py
 /test2.py
 /subtitle.ini
-/backend/models/**/*.onnx
+# OCR 模型体积大且可再下载，整个 models 目录不入库
+/backend/models/
 /config/config.json
 /.claude/
 /installer_output/

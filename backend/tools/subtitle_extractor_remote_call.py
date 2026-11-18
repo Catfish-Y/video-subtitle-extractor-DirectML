@@ -3,11 +3,11 @@ import threading
 from enum import Enum
 
 class Command(Enum):
-    FINISH = 0,
-    PROGRESS = 1,
-    LOG = 2,
-    MANAGE_PROCESS = 3,
-    ERROR = 4,
+    FINISH = 0
+    PROGRESS = 1
+    LOG = 2
+    MANAGE_PROCESS = 3
+    ERROR = 4
 
 class SubtitleExtractorRemoteCall:
     """
@@ -22,7 +22,11 @@ class SubtitleExtractorRemoteCall:
     def run(self):
         try:
             while self.running:
-                cmd, args = self.queue.get(block=True)
+                try:
+                    cmd, args = self.queue.get(block=True, timeout=0.2)
+                except multiprocessing.queues.Empty:
+                    # 超时后重新检查 running 标志，避免 stop() 后线程无法退出
+                    continue
                 if cmd == Command.FINISH:
                     break
                 callback = self.callbacks.get(cmd)

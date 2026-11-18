@@ -68,7 +68,8 @@ class VersionService:
                     enabled, _ = winreg.QueryValueEx(key, 'ProxyEnable')
 
                     if enabled:
-                        return "http://" + winreg.QueryValueEx(key, 'ProxyServer')
+                        proxy_server, _ = winreg.QueryValueEx(key, 'ProxyServer')
+                        return proxy_server if '://' in proxy_server else "http://" + proxy_server
             except:
                 pass
         elif sys.platform == "darwin":
