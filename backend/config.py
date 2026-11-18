@@ -90,8 +90,9 @@ class Config(QConfig):
     ocrBackend = OptionsConfigItem("Main", "OcrBackend", "auto", OptionsValidator(["auto", "cpu", "dml"]))
     # OCR 模型档位：light=轻量(tiny rec) / precise=精准(small rec)
     modelTier = OptionsConfigItem("Main", "ModelTier", "precise", OptionsValidator(["light", "precise"]))
-    # 指定 DML 设备索引（留空自动选择；可用值为 0,1,...）
-    dmlDeviceId = ConfigItem("Main", "DmlDeviceId", "")
+    # 指定 DML 设备索引（留空自动选择；预置 0-7 覆盖常见多 GPU 场景）
+    dmlDeviceId = OptionsConfigItem(
+        "Main", "DmlDeviceId", "", OptionsValidator(["", "0", "1", "2", "3", "4", "5", "6", "7"]))
     # 是否使用硬件加速
     hardwareAcceleration = ConfigItem("Main", "HardwareAcceleration", HARDWARD_ACCELERATION_OPTION, BoolValidator())
     # 启动时检查应用更新
