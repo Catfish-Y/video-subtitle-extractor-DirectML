@@ -1,8 +1,0 @@
-# DirectML 后端依赖（Windows AMD/Intel/NVIDIA GPU 通用加速）
-# 先卸载 CPU 版 onnxruntime，再安装本文件（两者不能共存）：
-#   pip uninstall -y onnxruntime
-#   pip install -r requirements_directml.txt
-# onnxruntime-directml 1.24+ 提供 Python 3.13 wheel，1.20.1 在 3.13 上会尝试
-# 从源码编译 onnx 而失败，故要求 >=1.24.4。
-onnxruntime-directml>=1.24.4
-onnx>=1.18.0

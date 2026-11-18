@@ -139,30 +139,24 @@ cd <source-code-directory>
 
 #### 4. Install the Appropriate Runtime Environment
 
-This project supports **Windows** only, with two execution backends: **CPU** and
-**DirectML (DML)**. OCR uniformly uses ONNX Runtime with official **PP-OCRv6** ONNX
-models and does not depend on PaddlePaddle.
+This project supports **Windows** only and ships as a **single installation** that
+supports both **CPU** and **DirectML (DML)** inference modes (assuming the GPU
+supports DX12, which all modern GPUs do). OCR uniformly uses ONNX Runtime with
+official **PP-OCRv6** ONNX models — no PaddlePaddle, no CUDA/cuDNN needed.
 
-##### (1) CPU backend (no GPU or GPU not used)
+##### (1) Install (single version, CPU / DML universal)
 
 ```shell
 pip install -r requirements.txt
 ```
 
-##### (2) DirectML backend (AMD / Intel / NVIDIA GPU acceleration)
-
-- Uses official PP-OCRv6 ONNX models with ONNX Runtime's `DmlExecutionProvider`.
-  NVIDIA GPUs also go through DML — no CUDA/cuDNN installation needed.
-- Uninstall the CPU build of onnxruntime first, then install the DirectML build
-  (they cannot coexist):
-  ```shell
-  pip install -r requirements.txt
-  pip uninstall -y onnxruntime
-  pip install -r requirements_directml.txt
-  ```
+- The `onnxruntime-directml` dependency provides both `CPUExecutionProvider` and
+  `DmlExecutionProvider`: install once and switch between CPU and any brand of GPU
+  (DirectML) — no separate CPU/DML builds, no uninstall-and-reinstall.
+- NVIDIA / AMD / Intel GPUs all go through DirectML; CUDA/cuDNN is unnecessary.
   > `onnxruntime-directml` 1.24.4+ is required (1.20.1 cannot be installed on Python 3.13).
 
-##### (3) Model download and tiers
+##### (2) Model download and tiers
 
 - Two model tiers (orthogonal to the frame-extraction mode, freely combinable in the GUI):
   - **Light**: `PP-OCRv6_small_det` + `PP-OCRv6_tiny_rec` — speed first;
@@ -177,7 +171,7 @@ pip install -r requirements.txt
   ```
   Extract into `~/.paddleocr/onnx/` so each model has `<name>/inference.onnx` and `inference.yml`.
 
-##### (4) Backend and device selection in the GUI
+##### (3) Backend and device selection in the GUI
 
 The "Basic Settings" page offers:
 - **OCR Backend**: `auto` (DML when available), `cpu`, `dml`;
@@ -203,9 +197,10 @@ python ./backend/main.py
 
 #### 1. Program not working / no results
 
-Solutions: On the Basic Settings page check the OCR backend and model status. If using
-DirectML, ensure `onnxruntime-directml` is installed (not the CPU build of `onnxruntime`)
-and use the "Download Missing Models" button if models are missing.
+Solutions: On the Basic Settings page check the OCR backend and model status. The single
+installation already includes both CPU and DML providers; if the GPU is not detected,
+confirm it supports DX12 and manually select the DML device on the Basic Settings page.
+Use the "Download Missing Models" button if models are missing.
 
 #### 2. 7z file extraction error
 

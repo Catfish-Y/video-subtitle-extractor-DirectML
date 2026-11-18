@@ -136,28 +136,23 @@ cd <源码所在目录>
 
 #### 4. 安装合适的运行环境
 
-本项目仅支持 **Windows**，提供两种执行后端：**CPU** 与 **DirectML（DML）**。
-OCR 统一使用 ONNX Runtime + 官方 **PP-OCRv6** ONNX 模型，不依赖 PaddlePaddle。
+本项目仅支持 **Windows**，只有一个安装版本，同时支持 **CPU** 与 **DirectML（DML）**
+两种推理模式（假设显卡支持 DX12；现役 GPU 均满足）。OCR 统一使用 ONNX Runtime +
+官方 **PP-OCRv6** ONNX 模型，不依赖 PaddlePaddle，也无需 CUDA/cuDNN。
 
-##### (1) CPU 后端（无 GPU 或不使用 GPU）
+##### (1) 安装（单一版本，CPU / DML 通用）
 
 ```shell
 pip install -r requirements.txt
 ```
 
-##### (2) DirectML 后端（AMD / Intel / NVIDIA GPU 通用加速）
-
-- 使用官方 PP-OCRv6 ONNX 模型，通过 ONNX Runtime 的 `DmlExecutionProvider`
-  执行 GPU 推理。NVIDIA 显卡也走 DML，无需安装 CUDA/cuDNN。
-- 先卸载 CPU 版 onnxruntime，再装 DirectML 版（两者不能共存）：
-  ```shell
-  pip install -r requirements.txt
-  pip uninstall -y onnxruntime
-  pip install -r requirements_directml.txt
-  ```
+- 依赖中的 `onnxruntime-directml` 同时提供 `CPUExecutionProvider` 与
+  `DmlExecutionProvider`：装一次即可在 CPU 与各品牌 GPU（DirectML）之间切换，
+  无需区分 CPU 版 / DML 版，也无需卸载重装。
+- NVIDIA / AMD / Intel 显卡统一走 DirectML，不需要 CUDA/cuDNN。
   > `onnxruntime-directml` 需 1.24.4+（1.20.1 在 Python 3.13 上无法安装）。
 
-##### (3) 模型下载与档位
+##### (2) 模型下载与档位
 
 - OCR 使用官方 PP-OCRv6 ONNX 模型，分为两个档位（与抽帧模式正交，可在 GUI 中自由组合）：
   - **轻量档**：`PP-OCRv6_small_det` + `PP-OCRv6_tiny_rec`，速度优先；
@@ -171,7 +166,7 @@ pip install -r requirements.txt
   ```
   将 tar 解压到 `~/.paddleocr/onnx/` 下，形成 `<模型名>/inference.onnx` 与 `inference.yml`。
 
-##### (4) GUI 中的后端与设备选择
+##### (3) GUI 中的后端与设备选择
 
 「基础设置」页提供：
 - **OCR 后端**：`auto`（有 DML 设备时自动用 DML）、`cpu`、`dml`；
@@ -197,8 +192,9 @@ python ./backend/main.py
 
 #### 1. 运行不正常/没有结果
 
-解决方案：在「基础设置」页检查 OCR 后端与模型状态。使用 DirectML 时请确认安装的是
-`onnxruntime-directml`（而非 CPU 版 `onnxruntime`）；若模型缺失，点击「一键下载缺失模型」。
+解决方案：在「基础设置」页检查 OCR 后端与模型状态。单一安装包已同时含 CPU / DML
+ provider；若 GPU 未被识别，确认显卡支持 DX12 并在「基础设置」页手动指定 DML 设备。
+ 模型缺失时点击「一键下载缺失模型」。
 
 #### 2. 7z文件解压错误
 
