@@ -1,7 +1,7 @@
 # VSE 代码库结构与维护指南
 
 > **文档目的**：对全部代码做逐文件、逐方法的梳理，作为日后**局部维护**与**全面重构**的共同基准。
-> **对应版本**：`backend/config.py` 中 `VERSION = "3.0.0"`（已完成缺陷修复、DirectML 接入与 PP-OCRv6 升级重构）。
+> **对应版本**：`backend/config.py` 中 `VERSION = "3.0.1"`（已完成缺陷修复、DirectML 接入与 PP-OCRv6 升级重构）。
 > **内容基准**：本文描述**当前磁盘上的最终代码状态**，不含变更历史。
 > **覆盖范围**：项目内全部 **41 个 Python 文件** 及 2 个 sushi bat 脚本。
 
@@ -134,6 +134,7 @@ flowchart TD
 | `backend/tools/subtitle_detect.py` | 35 | 精准模式文本框检测（ONNX det_only） | 三 |
 | `backend/tools/subtitle_extractor_remote_call.py` | 71 | 跨进程进度/日志队列协议 | 三 |
 | `backend/tools/subtitle_ocr.py` | 303 | OCR 子进程：生产者/消费者、区域过滤、落盘 | 三 |
+| `backend/tools/video_decoder.py` | ~700 | 视频解码统一入口：启动探测软/硬解器(D3D11/QSV/NVDEC)、顺序读基准择优、超时防护与失败回退 | 三 |
 | `backend/tools/theme_listener.py` | 26 | 系统主题监听（未启用） | 三 |
 | `backend/tools/version_service.py` | 84 | 更新检查与系统代理读取 | 三 |
 | `backend/tools/concurrent/__init__.py` | 1 | 空包标记 | 四 |
@@ -256,7 +257,7 @@ flowchart TD
 
 | 名称 | 行号 | 说明 |
 |------|------|------|
-| `VERSION` | 10 | 版本号 `"3.0.0"`，用于窗口标题与更新比对 |
+| `VERSION` | 10 | 版本号 `"3.0.1"`，用于窗口标题与更新比对 |
 | `PROJECT_HOME_URL` / `PROJECT_ISSUES_URL` / `PROJECT_RELEASES_URL` | 11-13 | 项目主页、Issues、Releases 地址 |
 | `PROJECT_UPDATE_URLS` | 14-17 | 两个更新源（GitHub API + 加速镜像） |
 | `HARDWARD_ACCELERATION_OPTION` | 19 | 硬件加速总开关常量 `True`，**拼写保留**；作为 `hardwareAcceleration` 默认值，并被 UI 层读取 |
@@ -302,12 +303,13 @@ flowchart TD
 | 24 | `wordSegmentation` | ConfigItem(Bool) | `True` | 是否重新分词，用于解决语句无空格 | 是（setting_interface.py:88） | 是 |
 | 25 | `ocrBackend` | OptionsConfigItem | `"auto"` | OCR 执行后端：`auto`（DML 优先）/ `cpu` / `dml` | 是（setting_interface.py:40 `backend_combo`） | 是 |
 | 26 | `modelTier` | OptionsConfigItem | `"precise"` | OCR 模型档位：`light`（tiny rec）/ `precise`（small rec） | 是（setting_interface.py:48 `tier_combo`） | 是 |
-| 27 | `dmlDeviceId` | OptionsConfigItem | `""` | 指定 DML 设备索引；`''` 表示自动选择，预置 `'0'`..`'7'` 覆盖多 GPU | 是（setting_interface.py:63 `device_combo`） | 是 |
+| 27 | `dmlDeviceId` | OptionsConfigItem | `""` | 指定 DML 设备索引；`''` 表示自动选择。索引语义 = `onnx_ocr.get_dml_ep_devices()` 枚举顺序（与 GUI 下拉框一致）；GUI 只列实际设备；启动迁移时越界索引自动重置为 `''` | 是（setting_interface.py `device_combo`） | 是 |
 | 28 | `hardwareAcceleration` | ConfigItem(Bool) | `HARDWARD_ACCELERATION_OPTION`（`True`） | 硬件加速总开关；关闭时强制走 CPU | 是（setting_interface.py:71） | 是 |
 | 29 | `checkUpdateOnStartup` | ConfigItem(Bool) | `True` | 启动时检查应用更新 | 是（advanced_setting_interface.py:189） | 是（gui.py:57） |
 | 30 | `saveDirectory` | ConfigItem | `""` | 视频保存目录，`ConfigValidator` | 是（advanced_setting_interface.py:183/306-313） | 是 |
 | 31 | `videoSubFinderCpuCores` | RangeConfigItem | `0` | VideoSubFinder CPU 核心数，范围 0-`os.cpu_count()` | 是（advanced_setting_interface.py:197） | 是 |
 | 32 | `videoSubFinderDecoder` | OptionsConfigItem(Enum) | `VideoSubFinderDecoder.OPENCV` | VideoSubFinder 视频解码组件枚举（OpenCV/FFmpeg），Enum 序列化 | 是（advanced_setting_interface.py:205） | 是 |
+| 33 | `videoHwDecode` | OptionsConfigItem + `_DecoderIdValidator` | `"auto"` | 视频硬件解码：`auto`=基准择优 / `sw`=软解 / `d3d11:n`=D3D11硬解(DXGI索引) / `qsv:n`=Intel QSV / `nvdec:n`=NVIDIA NVDEC。硬解选项启动时按实际硬件探测生成；旧值 `on`→`auto`、`off`→`sw` 迁移，失效 id 重置 `auto`；总加速开关关闭时一律软解 | 是（advanced_setting_interface.py `video_hw_decode`，动态下拉） | 是（tools/video_decoder.py） |
 
 - **调用关系**：被全项目广泛导入。`gui.py` 使用 `config / tr / VERSION`；`ui/setting_interface.py` 使用 `config / tr / HARDWARD_ACCELERATION_OPTION` 并绑定新增三项后端配置；`ui/advanced_setting_interface.py` 与 `ui/component/*` 读取/写入各项配置；后端 OCR 与预处理逻辑读取 `.value` 决定行为。
 
@@ -1040,7 +1042,9 @@ flowchart TD
 | `_app_root` / `_default_cache_dir` | 69-84 | 程序根目录（`onnx_ocr.py` 的 `parents[2]`，即 resources/）；模型缓存根目录默认 `程序目录/models`，`VSE_ONNX_MODEL_DIR` 可覆盖 |
 | `model_download_url` | 77-79 | 返回某模型目录名的官方下载 URL（`{base}/{name}.tar`） |
 | `check_models` | 82-91 | 检查指定档位模型是否齐全，返回 `(missing, directory)` |
-| `list_dml_devices` | 94-119 | 枚举 DML 设备，返回含 `index/name/vendor_id/device_id` 的字典列表 |
+| `get_dml_ep_devices` | - | 返回 ORT 枚举的 DML `OrtEpDevice` 对象列表；**GUI 设备索引的唯一语义来源** |
+| `list_dml_devices` | - | 枚举 DML 设备，返回含 `index/name/vendor_id/device_id/description/discrete` 的字典列表（name 用真实显卡描述） |
+| `describe_dml_device` | - | 按 GUI 索引返回设备描述，越界返回 None |
 | `_download_model` | 122-147 | 按需下载并安全解包单个模型，返回 `inference.onnx` 路径 |
 | `_read_char_dict` | 150-187 | 从 `inference.yml` 解析 CTC 字符字典，补 `blank` 与 `space` |
 | `_DBPostProcess` | 190-272 | DBNet 检测后处理：阈值分割、轮廓、unclip、四点框 |
@@ -1068,7 +1072,8 @@ flowchart TD
 
 - **实现细节**：
   - **档位**：`MODEL_TIERS=('tiny','small','medium')`；det 与 rec 各有三档，由 `detModelTier`/`modelTier` 独立选择；非法档位回退为 `small`。
-  - **providers**：未显式传入时按 `DmlExecutionProvider → CPUExecutionProvider` 中可用项构造，且至少保留 CPU（321-329）；指定 `dml_device_id` 时把 DML provider 转成 `(name, {'device_id': str(id)})`（331-338）；`active_provider` 取 `det_session.get_providers()[0]`（347）。
+  - **providers**：未显式传入时按 `DmlExecutionProvider → CPUExecutionProvider` 中可用项构造，且至少保留 CPU；`active_provider` 取 `det_session.get_providers()[0]`。
+  - **DML 设备绑定（2026-11-19 修复）**：GUI 设备索引 = `get_dml_ep_devices()`（`ort.get_ep_devices()` 过滤 DML）的枚举顺序（独显优先）。**该顺序与 DML provider 选项 `device_id` 的 DXGI 适配器顺序不一致**（本机实测枚举 0=NVIDIA/1=Intel，而 device_id 0=Intel/1=NVIDIA），旧实现用 `device_id` 导致选 0# 实际跑 Intel、选 1# 实际跑 NVIDIA。现改为 `SessionOptions.add_provider_for_devices([ep_device], {})` 直接绑定设备对象（此时**不能**再向 `InferenceSession` 传 `providers` 参数，否则会覆盖绑定）；索引越界时打印警告并回退自动选择；DML 会话创建失败回退 CPU 时也会打印警告。`dml_device_name` 记录实际绑定设备名，`ocr.py init_model` 会打印「实际执行: DirectML @ 设备名 / CPU」供用户核实。
   - **模型缓存**：默认 `程序目录/models`（绿色版便携，与 `config/` 同级），`VSE_ONNX_MODEL_DIR` 可覆盖（69-84）。`check_models` 以各模型目录下是否存在 `inference.onnx` 判定齐全（90）。`_download_model` 下载 `.tar` 并解包，解包前校验成员路径必须位于目标目录内以防路径穿越（139-143），缺 `inference.onnx` 则抛错（145-146）。
   - **字典**：`_read_char_dict` 用 `yaml.safe_load` 解析 `inference.yml` 的 `PostProcess.character_dict`（158-161），避免手工切分把引号读进字典；无 PyYAML 时逐行去成对引号回退（163-179）；最终 `['blank'] + chars`，若不含空格再追加 `' '`（184-187），与 CTCLabelDecode 的 `add_special_char` / `use_space_char` 行为对齐。
   - **检测后处理**：`_DBPostProcess.__call__` 阈值分割 → `findContours` → 限 `max_candidates` → `_mini_boxes` + 短边 >3 → `_box_score_fast` 置信度过滤 → `_unclip` 外扩 → 缩放回原图并 clip（201-230）。
@@ -1205,13 +1210,50 @@ flowchart TD
   - 构造时以 `dml_device_id=device_id, det_only=True` 创建底层识别器（27-28）。
   - 由精准模式抽帧流程调用，消费返回的 `dt_boxes`。
 
-- **实现细节**：`__init__` 中 `backend` 关闭总加速则强制 `cpu`，仅 `backend=='dml'` 时启用 DML providers，否则 CPU（13-19）；`dmlDeviceId` 转 `int`，非法值忽略（20-26）；`detect_subtitle` 调用 `self.detector.detect(img)` 并用 `np.array(..., dtype=object)` 包装返回，耗时位固定为 `0`（35）。
+- **实现细节**：`__init__` 中 `backend` 关闭总加速则强制 `cpu`；`dml` 启用 DML providers；`auto` 与 OCR 门面一致（有 DML 设备用 DML，否则 CPU，2026-11-19 补齐）；`dmlDeviceId` 转 `int`，非法值忽略；`detect_subtitle` 调用 `self.detector.detect(img)` 并用 `np.array(..., dtype=object)` 包装返回，耗时位固定为 `0`。
 
 - **维护注意点**：
   - 返回 `np.array(..., dtype=object)` 是为兼容 `get_coordinates`（`ocr.py:102`）对框的遍历；改动返回类型会影响下游坐标提取。
-  - 与 `ocr.py::_resolve_config` 不同，此处**没有 `auto` 分支**：`ocrBackend=='auto'` 时本类走 CPU，而主 OCR 走 DML（若有设备），二者后端可能不一致；如需一致，应在此补齐 `auto` 逻辑或复用统一解析函数。
+  - `auto` 分支已补齐（旧版此处 auto 走 CPU 而主 OCR 走 DML，导致精准模式逐帧检测异常缓慢）；后续如改后端解析逻辑，应与 `ocr.py::_resolve_config` 保持同步。
   - `det_only=True` 意味着底层只加载 det 会话，速度快，但只能得到文本框、无法识别文字，不可用于需要文本内容的场景。
   - `elapse` 固定返回 0，未做真实计时；调用方不应依赖该值做性能统计。
+
+---
+
+### backend/tools/video_decoder.py
+
+- **路径**：`D:/VSCode/video-subtitle-extractor-main/backend/tools/video_decoder.py`
+- **职责**：视频解码统一入口（2026-11-19 新增，同日升级为多解码器架构）。所有 `cv2.VideoCapture` 打开视频的路径（`main.py` 主 capture / 水印与场景过滤采样、`subtitle_ocr.py` OCR 帧读取生产者、`home_interface.py` 预览）都改为 `open_capture()`，按配置与实测性能选择软解或具体硬解器。
+- **解码器 id 方案**（程序启动时按实际硬件能力探测，见 `probe_decoders`）：
+
+| id | 含义 | 实现路径 |
+|----|------|----------|
+| `sw` | 软件解码（兜底，恒可用） | OpenCV ffmpeg 后端多线程 |
+| `d3d11:<n>` | D3D11VA/DXVA2 硬解，n=DXGI 适配器索引（NVIDIA/Intel/AMD 通用） | OpenCV 原生 `CAP_PROP_HW_ACCELERATION=D3D11 + HW_DEVICE=n` |
+| `qsv:<n>` | Intel Quick Sync Video，n=QSV 设备索引（仅 Intel 显卡） | ffmpeg 子进程流式管道（`_FfmpegCapture`） |
+| `nvdec:<n>` | NVIDIA NVDEC/CUDA，n=CUDA 设备索引（仅 NVIDIA 显卡） | ffmpeg 子进程流式管道（`_FfmpegCapture`） |
+
+- **关键函数**：
+
+| 名称 | 说明 |
+|------|------|
+| `probe_decoders(force)` | 启动探测本机可用解码器，返回 `[{'id','label','kind','device'}]`，进程内缓存。D3D11 用合成样片+读帧+属性三重验证（无效 DXGI 索引会静默成功，必须实测）；QSV/NVDEC 用 `-init_hw_device qsv=qs:n`/`cuda=cu:n` + lavfi 单帧探测，仅存在对应厂商显卡时才探 |
+| `probe_done()` / `is_valid_decoder_id(v)` / `normalize_mode(v)` | 探测状态查询 / id 格式校验（不触发探测）/ 旧值归一化（`on`→`auto`、`off`→`sw`、非法→`auto`） |
+| `open_capture(path, frame_count, fps)` | 返回 `(cap, decoder_id)`；`'sw'` 表示软解。硬解打开失败/首帧预检失败自动回退软解 |
+| `decide(path, ..., mode)` | 决策核心，按 `(path, mode)` 进程缓存。`sw` 恒软解；指定具体 id 直接用；`auto` 先 `_verify_hw_decoder` 剔除不可用者，再顺序读基准择优（硬解快 >10% 才启用） |
+| `describe(decoder_id)` | 日志描述：`软件解码` / `硬件解码 (<label>)` |
+
+- **关键类**：
+  - `_FfmpegCapture`：QSV/NVDEC 的 ffmpeg rawvideo(BGR24) 管道包装器，接口兼容 `cv2.VideoCapture`（`read/set/get/release/isOpened`）。打开时预读首帧验证可解码并缓存（`read` 先返回它，帧号从 0 起）。**seek 用输出侧 `-ss`**（解码后按时间戳丢帧）：输入侧 `-ss` 会把时间戳对齐到关键帧，QSV 实测在 GOP 中段整段错位（帧 24-200 偏差 11-17 级）；输出侧逐帧精确（±1 级）。向前 seek 顺序跳帧、向后 seek 重启管道（从头解码到目标，长视频较慢，但真实提取按时间递增读帧极少向后 seek）。读帧带 30s 守护线程超时，超时终止子进程防挂起；帧用 `.copy()` 保证可写（下游 `cv2.rectangle/putText` 原地绘制）；子进程交 `ProcessManager` 托管，退出统一终止。
+  - `_PrefetchedCapture`：D3D11 首帧预检包装器，缓存预读首帧供 `read` 返回，其余接口透传。
+- **实现要点与实测结论（本机 GTX1070 + UHD630）**：
+  - OpenCV `CAP_PROP_HW_DEVICE` 不能与 `NONE`/`ANY` 组合（直接打开失败）；无效 DXGI 索引（如 5/99）不报错而是静默落到默认设备，故设备列表必须由真实 DXGI 枚举生成。
+  - OCR 需要 CPU 侧 BGR 帧，硬解后 GPU→CPU 回读开销大：常见 H.264（1080p/4K）软解反而更快（1080p 软解 ~226fps vs NV 硬解 ~167fps）。因此默认 `auto` 基准择优，而不是盲目开硬解。
+  - **基准用顺序读而非中段 seek**：真实提取（按帧率采样/VSF 时间戳递增）以顺序读帧为主；QSV/NVDEC 向后 seek 需从头解码（HEVC 长视频中段 seek 实测 ~60s），用 seek 基准会严重失真。
+  - **D3D11 挂起防护**：某些 HEVC 视频在 Intel UHD630 上首帧正常、但读取触发 DXGI 设备移除（staging texture 创建失败 `887a0005`），此后 cv2 `read/set` 在 C++ 层无限阻塞。`_verify_hw_decoder`/`_bench_one`/`open_capture` 首帧预检均套 `_run_with_timeout` 守护线程超时（12s），超时即弃用该硬解器回退软解，并主动 `release` 防子进程/设备泄漏。实测强制选中损坏的 `d3d11:0` 也能 0.34s 快速回退。
+  - 硬解与软解的解码帧存在 ±1 级别 YUV→BGR 转换差异，对 OCR 无影响；H.264 短视频端到端验证 QSV/NVDEC 顺序读、向前/向后 seek、POS_MSEC seek 帧号均与软解一致（28/28 通过）。
+  - `auto` 决策在首次打开视频时执行，同进程内缓存；GUI 预览与后台提取分属不同进程，各自决策一次。启动探测（`probe_decoders`）由高级设置页后台线程触发（`TaskExecutor.runTask(validate_decoder_selection)`），约 3s，不阻塞 UI。
+  - ffmpeg 命令行路径（sushi 时间轴同步的 `demux.py`）只解音频/字幕/时间戳，不涉及视频帧解码，无需硬解。VSF 抽帧是外部 exe，硬解能力由其自身决定，不受本模块控制。
 
 ---
 
@@ -2018,6 +2060,8 @@ flowchart TD
 | `save_directory` | 179-186 | `PushSettingCard`，clicked→`choose_save_directory` |
 | `check_update_on_startup` | 188-194 | `SwitchSettingCard(config.checkUpdateOnStartup)` |
 | `video_sub_finder_*` | 196-211 | CPU 核心数、解码组件（枚举 `VideoSubFinderDecoder`） |
+| `video_hw_decode` | — | **视频硬件解码**（`config.videoHwDecode`）动态下拉：自动 + 软件解码 + 启动探测到的各硬解器（D3D11/QSV/NVDEC）。构造时先用 `validator.options` 占位，后台 `TaskExecutor.runTask(validate_decoder_selection).then(_refresh_decode_options)` 探测完成后重建下拉项 |
+| `_decode_option_texts` / `_refresh_decode_options` | — | id→显示文本翻译 / 探测完成后清空重填下拉项并同步当前值（`ComboBoxSettingCard` 的 `optionToText` 构造时固化，必须重建） |
 | `debug_* / delete_empty_time_stamp` | 213-235 | 开发组三个开关 |
 | `feedback / copyright / project_link` | 237-264 | 关于组：反馈链接、版权（触发检查更新）、项目主页 |
 | `show_message_box` | 266-275 | 封装 `MessageBox`，可选是否显示"是"按钮及其回调 |
@@ -2039,6 +2083,7 @@ flowchart TD
   - `recBatchNumber`/`maxBatchSize` 定义为 `RangeConfigItem`，范围分别 1-100（默认 6）、1-256（默认 10），见 `config.py:58/60`。二者**当前已接入后端**：`recBatchNumber` 在 `backend/tools/ocr.py:58` 作为 `rec_batch_size` 传入 `OnnxOcrRecogniser`（识别批大小）；`maxBatchSize` 在 `backend/main.py:985` 作为 options 的 `MAX_BATCH_SIZE`（注释标明"帧预取队列容量，供 OCR 生产者/消费者使用"）。即这两个卡片不再是纯展示项。
   - 配置文本全部通过 `tr[...]` 取翻译；`save_directory` 内容在无值时显示 `SaveDirectoryDefault` 占位（183）。
   - 版本检查为异步：`check_update` 用 `TaskExecutor.runTask`，避免在 UI 线程阻塞网络请求。
+  - **硬解下拉动态生成**：`video_hw_decode` 的选项不是固定三档，而是 `['auto'] + probe_decoders() 的 id`。启动探测（约 3s，含合成样片生成 + 各 DXGI 设备 D3D11 验证 + QSV/NVDEC ffmpeg 设备探测）在后台线程执行，完成后 `_refresh_decode_options` 在主线程重建下拉项（`combo.clear()` + 逐项 `addItem(text, userData=id)` + 重填 `optionToText` + `setCurrentText` 同步当前值，全程 `blockSignals` 避免误写 config）。`validate_decoder_selection`（config.py）同时把 `validator.options` 更新为实际选项，并将失效的已保存 id 重置为 `auto`。`_decode_option_texts` 把 `auto`/`sw` 翻译为本地化文本（`VideoHwDecodeAuto`/`VideoHwDecodeSw`），硬解器直接用探测 label（含显卡全名）。
 
 - **调用关系**：
   - 依赖 `backend.config`（config/tr/VERSION/三个项目 URL，13）、`backend.tools.version_service.VersionService`（14）、`backend.tools.concurrent.TaskExecutor`（15）、`backend.tools.constant.VideoSubFinderDecoder`（16）。
@@ -2070,7 +2115,8 @@ flowchart TD
 | `mode_combo` | 32-36 | 识别模式/抽帧策略（`config.mode`） |
 | `backend_combo` | 39-44 | **OCR 后端**（`config.ocrBackend`，texts 固定 `['auto','cpu','dml']`） |
 | `tier_combo` | 47-54 | **模型档位**（`config.modelTier`，显示 light/precise，翻译缺失时回退英文） |
-| `device_combo` | 56-67 | **DML 设备**（`config.dmlDeviceId`，9 项：Auto + 0..7，显示文本用设备名） |
+| `device_combo` | — | **DML 设备**（`config.dmlDeviceId`），用 `DeviceComboBoxSettingCard`：只列实际枚举到的设备（Auto + 真实 GPU），下拉框宽度固定为卡片宽度 50% 防溢出 |
+| `DeviceComboBoxSettingCard` | — | `ComboBoxSettingCard` 子类：下拉框 `Fixed` 尺寸策略 + 卡片 `resizeEvent`/事件过滤器把宽度钉在 `WIDTH_RATIO=0.5`；长显卡名省略号显示、完整名放 tooltip（`currentTextChanged` 同步）；下拉菜单弹出仍按全文自适应 |
 | `hardware_acceleration` | 70-78 | 硬件加速开关；`HARDWARD_ACCELERATION_OPTION=False` 时置 False 并禁用（75-78） |
 | `generate_txt_switch` | 81-84 | 是否生成 TXT（`config.generateTxt`） |
 | `word_segmentation` | 87-91 | 是否重新分词（`config.wordSegmentation`） |
@@ -2086,7 +2132,8 @@ flowchart TD
 - **实现细节**：
   - **OCR 后端卡片**（39-44）：绑定 `config.ocrBackend`（`config.py:90`，validator `['auto','cpu','dml']`），texts 与 validator 选项逐项对应。
   - **模型档位卡片**（47-54）：绑定 `config.modelTier`（`config.py:92`，validator `['light','precise']`）；显示文本优先取 `tr['Setting']['ModelTierLight'/'ModelTierPrecise']`，缺失时回退 `'light'/'precise'`。选项顺序与 validator 顺序一致（light、precise）。
-  - **DML 设备卡片**（56-67）：构造时 `devices = env_check.list_dml_devices()`（57），构建 `{index字符串: name}` 映射（58）；显示文本第 0 项为自动（59 `AutoDevice`），随后 `for i in range(8)`（60-61）按索引取设备名，缺失则回填 `GPU #i`。因此**显示 9 项文本**对应 `config.dmlDeviceId` validator 的 9 个值 `'' + '0'..'7'`（`config.py:94-95`）——显示名与存储值解耦，存储值由 `ComboBoxSettingCard` 依据选项索引写入，保证与 validator 对齐。
+  - **DML 设备卡片**：构造时 `devices = env_check.list_dml_devices()`，显示文本第 0 项为自动（`AutoDevice`），随后 `f"#{d['index']}  {d['name']}"` 只列**实际枚举到的设备**（不再显示不存在的 GPU #2-#7 占位项）。索引语义 = `onnx_ocr.get_dml_ep_devices()` 枚举顺序，与执行时绑定的设备严格一致。卡片介绍缩短为「选择OCR使用的GPU」（`DmlDeviceDesc`，8 语言同步）。
+  - **防溢出（`DeviceComboBoxSettingCard`）**：显卡全名可能很长（如 "NVIDIA GeForce GTX 1070 with Max-Q Design"），qfluentwidgets 的 `ComboBox.setText` 会 `adjustSize` 撑宽把卡片顶出界面。子类把下拉框尺寸策略改 `Fixed`、`minimumWidth=0`，在卡片 `resizeEvent` 与下拉框 `Resize` 事件过滤器里把宽度钉回 `卡片宽度 × 0.5`（下限 120px）；文本超宽时按钮自动省略号，完整名经 `currentTextChanged→_sync_combo_tooltip` 放 tooltip。实测主窗口卡片 488px→下拉 244px（比例 0.50），窄窗（420px）与超长名均不溢出（GUI offscreen 12/12 通过）。
   - **启动检测**（100-101、103-113）：`refresh_environment()` 在构造末尾同步执行，`env_check.detect_environment()` 返回 `{dml_devices, model_tier, missing, model_dir, ready}`；`ready=True` 显示 `ModelReady`，否则显示 `env_check.describe_missing(info)`——后者包含**下载来源 URL + 模型目录**（`env_check.py:48-55`，URL 由 `model_download_url` 生成、目录为 `info['model_dir']`）。`dml_devices` 为空时弹 `InfoBar.warning`（110-113）。
   - **一键下载**（115-130）：点击时若 `env_info is None` 或 `ready` 则仅重新检测；否则调用 `env_check.download_missing_models(info, progress, done)`。`progress`（122-123）/ `done`（125-128）回调把下载进度/结果写回 `model_check_card.setContent`，成功后再次 `refresh_environment()` 刷新状态。下载在 `env_check` 内部以守护线程执行，不阻塞 UI。
 

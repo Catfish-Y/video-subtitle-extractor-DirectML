@@ -15,6 +15,12 @@ class SubtitleDetect:
             backend = 'cpu'
         if backend == 'dml':
             providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+        elif backend == 'auto':
+            # auto 与 OCR 门面保持一致：有 DML 设备就用 DML，否则 CPU
+            from backend.tools.hardware_accelerator import HardwareAccelerator
+            providers = (['DmlExecutionProvider', 'CPUExecutionProvider']
+                         if HardwareAccelerator.instance().has_dml()
+                         else ['CPUExecutionProvider'])
         else:
             providers = ['CPUExecutionProvider']
         device_id = None

@@ -1,5 +1,5 @@
 from PySide6 import QtWidgets
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, QEvent
 from qfluentwidgets import (FluentIcon, ComboBoxSettingCard, SwitchSettingCard,
                             PushSettingCard, InfoBar, MessageBoxBase, SubtitleLabel,
                             BodyLabel, HyperlinkLabel)
@@ -13,6 +13,48 @@ def _t(key, default):
         return tr['Setting'][key]
     except (KeyError, TypeError):
         return default
+
+
+class DeviceComboBoxSettingCard(ComboBoxSettingCard):
+    """DML 设备选择卡片：下拉框宽度固定为卡片宽度的一定比例（默认 50%）。
+
+    显卡全名可能很长（如 "NVIDIA GeForce GTX 1070 with Max-Q Design"），
+    qfluentwidgets 的 ComboBox 会按当前文本 adjustSize 撑宽，把卡片布局
+    顶出界面。这里把下拉框宽度钉死在卡片宽度的比例上：
+    - 关闭按钮的 Expanding 尺寸策略，改为 Fixed，宽度由卡片 resizeEvent 驱动；
+    - 文本超出宽度时按钮自动省略号显示，完整名称放 tooltip；
+    - 下拉菜单弹出时仍按完整文本自适应宽度（不受按钮宽度限制）。
+    """
+
+    WIDTH_RATIO = 0.5
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        combo = self.comboBox
+        combo.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        combo.setMinimumWidth(0)
+        combo.installEventFilter(self)
+        combo.currentTextChanged.connect(lambda _t: self._sync_combo_tooltip())
+        self._sync_combo_width()
+        self._sync_combo_tooltip()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_combo_width()
+
+    def eventFilter(self, obj, event):
+        if obj is self.comboBox and event.type() == QEvent.Resize:
+            # ComboBox.setText 会 adjustSize 试图撑宽，这里立即拉回比例宽度
+            self._sync_combo_width()
+        return super().eventFilter(obj, event)
+
+    def _sync_combo_width(self):
+        target = max(120, int(self.width() * self.WIDTH_RATIO))
+        if self.comboBox.width() != target:
+            self.comboBox.setFixedWidth(target)
+
+    def _sync_combo_tooltip(self):
+        self.comboBox.setToolTip(self.comboBox.currentText())
 
 
 class SettingInterface(QtWidgets.QVBoxLayout):
@@ -78,13 +120,13 @@ class SettingInterface(QtWidgets.QVBoxLayout):
             parent=parent, texts=tier_texts)
         self._add_card(self.tier_combo)
 
-        # DML 设备选择
+        # DML 设备选择：只列出实际枚举到的设备，序号与执行时绑定的
+        # 设备索引严格一致（不再显示不存在的 GPU #2-#7 占位项）。
+        # 下拉框宽度按卡片宽度 50% 固定，长显卡名省略号显示，防止撑出界面。
         devices = env_check.list_dml_devices()
-        device_by_index = {str(d['index']): d['name'] for d in devices}
         device_names = [tr['Setting']['AutoDevice']]
-        for i in range(8):
-            device_names.append(device_by_index.get(str(i), f'GPU #{i}'))
-        self.device_combo = ComboBoxSettingCard(
+        device_names.extend(f"#{d['index']}  {d['name']}" for d in devices)
+        self.device_combo = DeviceComboBoxSettingCard(
             configItem=config.dmlDeviceId, icon=FluentIcon.DEVELOPER_TOOLS,
             title=tr["Setting"]["DmlDevice"],
             content=tr["Setting"]["DmlDeviceDesc"],

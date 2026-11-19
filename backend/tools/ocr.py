@@ -60,6 +60,12 @@ class OcrRecogniser:
             rec_batch_size=config.recBatchNumber.value,
         )
         self.backend_used = recogniser.active_provider
+        # 打印实际执行设备，便于用户核实 GUI 选择是否生效
+        if recogniser.active_provider == 'DmlExecutionProvider':
+            dev = recogniser.dml_device_name or '自动选择'
+            print(f'[OCR] 实际执行: DirectML @ {dev}')
+        else:
+            print('[OCR] 实际执行: CPU')
         return recogniser
 
     def predict(self, image):

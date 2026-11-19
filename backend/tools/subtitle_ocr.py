@@ -7,6 +7,7 @@ from tqdm import tqdm
 from backend.tools.ocr import OcrRecogniser, get_coordinates
 from backend.tools.constant import SubtitleArea
 from backend.tools import constant
+from backend.tools import video_decoder
 from threading import Thread
 import queue
 from types import SimpleNamespace
@@ -176,7 +177,9 @@ def ocr_task_producer(ocr_queue, task_queue, progress_queue, video_path, raw_sub
     :param video_path
     :param raw_subtitle_path
     """
-    cap = cv2.VideoCapture(video_path)
+    # 与主进程一致：按配置选择软/硬解码（子进程内独立做基准/缓存）
+    cap, hw_dev = video_decoder.open_capture(video_path)
+    print(f'[OCR帧读取] 视频解码: {video_decoder.describe(hw_dev)}')
     tbar = None
     frame_count = 0
     while True:

@@ -120,32 +120,52 @@ def check_models(model_tier='small', det_model_tier=None, cache_dir=None):
     return missing, str(cache)
 
 
-def list_dml_devices():
-    """枚举可用的 DML 设备，返回 [{'index': int, 'name': str, 'vendor_id': int, 'device_id': int}]。
+def get_dml_ep_devices():
+    """返回 onnxruntime 枚举到的 DML EP 设备对象列表（OrtEpDevice）。
 
-    设备顺序即 onnxruntime 的 device_id 索引。GPU 厂商根据 vendor_id 推断名称。
+    **重要**：此列表的顺序（独显优先）与 DML provider 选项 ``device_id``
+    使用的 DXGI 适配器顺序**不一致**（本机实测 ep_devices: 0=NVIDIA/1=Intel，
+    而 device_id: 0=Intel/1=NVIDIA）。因此本项目的设备索引统一以本列表为准，
+    通过 ``SessionOptions.add_provider_for_devices`` 直接绑定设备对象，
+    不再使用 ``device_id`` 选项，保证 GUI 显示与实际执行设备一一对应。
     无 onnxruntime 或枚举失败时返回空列表。
     """
     try:
         import onnxruntime as ort
-        devices = []
-        index = 0
-        vendor_names = {4318: 'NVIDIA', 32902: 'Intel', 4098: 'AMD', 5140: 'Qualcomm'}
-        for ep in ort.get_ep_devices():
-            if 'Dml' not in ep.ep_name:
-                continue
-            hw = ep.device
-            vendor = vendor_names.get(hw.vendor_id, f'Vendor({hw.vendor_id})')
-            devices.append({
-                'index': index,
-                'name': f'{vendor} GPU #{index} (id={hw.device_id})',
-                'vendor_id': hw.vendor_id,
-                'device_id': hw.device_id,
-            })
-            index += 1
-        return devices
+        return [ep for ep in ort.get_ep_devices() if 'Dml' in ep.ep_name]
     except Exception:
         return []
+
+
+def list_dml_devices():
+    """枚举可用的 DML 设备，返回 [{'index', 'name', 'vendor_id', 'device_id', 'description'}]。
+
+    index 即 GUI「DML 设备」下拉框的序号，与 :func:`get_dml_ep_devices`
+    的顺序严格一致；会话创建时按同一索引绑定设备对象。
+    """
+    devices = []
+    for index, ep in enumerate(get_dml_ep_devices()):
+        hw = ep.device
+        meta = dict(hw.metadata) if hw.metadata else {}
+        description = meta.get('Description', '').strip()
+        name = description or f'GPU #{index} (vendor={hw.vendor_id}, id={hw.device_id})'
+        devices.append({
+            'index': index,
+            'name': name,
+            'vendor_id': hw.vendor_id,
+            'device_id': hw.device_id,
+            'description': description,
+            'discrete': meta.get('Discrete') == '1',
+        })
+    return devices
+
+
+def describe_dml_device(index):
+    """按 GUI 设备索引返回设备描述（越界/无设备时返回 None）。"""
+    devices = list_dml_devices()
+    if index is None or not 0 <= index < len(devices):
+        return None
+    return devices[index]['name']
 
 
 def _download_model(model_dir_name, cache_dir):
@@ -332,8 +352,10 @@ class OnnxOcrRecogniser:
     :param model_dir: 可选，自定义 ONNX 模型根目录（含六个模型子目录）。
     :param model_tier: 识别模型档位 ``tiny`` / ``small`` / ``medium``。
     :param det_model_tier: 检测模型档位，None 时与识别档位相同。
-    :param dml_device_id: 可选，DML 设备索引（见 :func:`list_dml_devices`），
-        ``None`` 表示由 onnxruntime 自动选择。
+    :param dml_device_id: 可选，DML 设备索引（见 :func:`list_dml_devices`，
+        与 GUI 下拉框序号一致），``None`` 表示由 onnxruntime 自动选择。
+        通过 ``add_provider_for_devices`` 绑定设备对象实现，不使用
+        ``device_id`` provider 选项（其 DXGI 顺序与枚举顺序不一致）。
     :param rec_batch_size: 识别阶段每批处理的文本框数量（来自配置项）。
     :param det_only: 仅加载检测模型（供精准模式做逐帧文本框检测用）。
     """
@@ -360,32 +382,52 @@ class OnnxOcrRecogniser:
         if ('DmlExecutionProvider' not in providers
                 and 'CPUExecutionProvider' not in providers):
             raise RuntimeError('[ONNX] 无可用执行提供程序（DML / CPU）')
+        self.providers = list(providers)
 
-        # 将 provider 列表转为可带选项的格式，用于指定 DML 设备
-        formatted = []
-        for p in providers:
-            if p == 'DmlExecutionProvider' and dml_device_id is not None:
-                formatted.append((p, {'device_id': str(dml_device_id)}))
+        # 设备绑定：按 GUI 索引取枚举到的设备对象，直接绑定（顺序有保证）。
+        # 索引越界（如换机后 GPU 数变少）时回退为自动选择并打印警告。
+        self.dml_device_id = None
+        self.dml_device_name = None
+        self._bound_ep_device = None
+        if 'DmlExecutionProvider' in providers and dml_device_id is not None:
+            ep_devices = get_dml_ep_devices()
+            if 0 <= dml_device_id < len(ep_devices):
+                self._bound_ep_device = ep_devices[dml_device_id]
+                self.dml_device_id = dml_device_id
+                meta = dict(self._bound_ep_device.device.metadata or {})
+                self.dml_device_name = meta.get('Description', '').strip() or f'GPU #{dml_device_id}'
             else:
-                formatted.append(p)
-        self.providers = formatted
+                print(f'[ONNX] 警告: DML 设备 #{dml_device_id} 不存在'
+                      f'（当前共 {len(ep_devices)} 个设备），改为自动选择')
 
         self.cache_dir = Path(model_dir).expanduser() if model_dir else _default_cache_dir()
         self.det_path = _download_model(_DET_MODEL_DIRS[det_tier], self.cache_dir)
 
-        session_options = ort.SessionOptions()
-        self.det_session = ort.InferenceSession(
-            str(self.det_path), sess_options=session_options, providers=formatted)
+        self.det_session = self._create_session(str(self.det_path))
         self.det_post = _DBPostProcess()
         self.active_provider = self.det_session.get_providers()[0]
+        if 'DmlExecutionProvider' in providers and self.active_provider != 'DmlExecutionProvider':
+            print('[ONNX] 警告: DML 会话创建失败，已回退到 CPU 执行')
 
         if not det_only:
             rec_model_dir = _REC_MODEL_DIRS[model_tier]
             self.rec_path = _download_model(rec_model_dir, self.cache_dir)
             self.char_list = _read_char_dict(rec_model_dir, self.cache_dir)
-            self.rec_session = ort.InferenceSession(
-                str(self.rec_path), sess_options=session_options, providers=formatted)
+            self.rec_session = self._create_session(str(self.rec_path))
             self.rec_decode = _CTCDecode(self.char_list)
+
+    def _create_session(self, model_path):
+        """创建推理会话；指定了设备则用 add_provider_for_devices 精确绑定。
+
+        注意：使用 add_provider_for_devices 后不能再向 InferenceSession 传
+        providers 参数（会覆盖 SessionOptions 的配置并退回错误设备）。
+        """
+        ort = self._ort
+        so = ort.SessionOptions()
+        if self._bound_ep_device is not None and hasattr(so, 'add_provider_for_devices'):
+            so.add_provider_for_devices([self._bound_ep_device], {})
+            return ort.InferenceSession(model_path, sess_options=so)
+        return ort.InferenceSession(model_path, sess_options=so, providers=self.providers)
 
     def _det_predict(self, image):
         """检测文本框，返回 [(x1,y1,x2,y2), ...] 的 AABB 列表。"""

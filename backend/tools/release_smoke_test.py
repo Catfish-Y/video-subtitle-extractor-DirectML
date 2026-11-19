@@ -82,6 +82,7 @@ PROJECT_MODULES = (
     "backend.tools.onnx_ocr",
     "backend.tools.env_check",
     "backend.tools.subtitle_detect",
+    "backend.tools.video_decoder",
 )
 
 # _pth 里声明的 site-packages 相对路径（QPT 约定）

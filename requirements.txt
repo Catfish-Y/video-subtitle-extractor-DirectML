@@ -1,4 +1,4 @@
-# VSE 3.0.0 运行依赖（Windows 单一版本：CPU + DirectML）
+# VSE 3.0.1 运行依赖（Windows 单一版本：CPU + DirectML）
 #
 # 【重要】QPT 1.0b8 的依赖打平（flatten_requirements -> search_dep -> pkg.requires()）
 # 在新版 pip/packaging 下会抛 TypeError。构建脚本里的兼容补丁捕获该异常后直接

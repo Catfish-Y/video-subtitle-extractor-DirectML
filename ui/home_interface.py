@@ -16,6 +16,7 @@ from ui.icon.my_fluent_icon import MyFluentIcon
 from backend.config import config, tr
 from backend.tools.subtitle_extractor_remote_call import SubtitleExtractorRemoteCall
 from backend.tools.process_manager import ProcessManager
+from backend.tools import video_decoder
 
 class HomeInterface(QWidget):
     progress_signal = Signal(int, int, int, bool, int) 
@@ -574,7 +575,7 @@ class HomeInterface(QWidget):
         if self.video_cap:
             self.video_cap.release()
             self.video_cap = None
-        self.video_cap = cv2.VideoCapture(self.video_path)
+        self.video_cap, _ = video_decoder.open_capture(self.video_path)
         if not self.video_cap.isOpened():
             return False
         ret, frame = self.video_cap.read()

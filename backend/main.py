@@ -30,6 +30,7 @@ from backend.tools.ocr import OcrRecogniser, get_coordinates
 from backend.tools import subtitle_ocr
 from backend.tools.process_manager import ProcessManager
 from backend.tools.subtitle_detect import SubtitleDetect
+from backend.tools import video_decoder
 from backend.bean.subtitle_area import SubtitleArea
 import threading
 import platform
@@ -54,7 +55,8 @@ class SubtitleExtractor:
         self.sub_detector = SubtitleDetect()
         # 视频路径
         self.video_path = vd_path
-        self.video_cap = cv2.VideoCapture(vd_path)
+        # 打开视频（按配置自动选择软/硬解码，硬解失败自动回退软解）
+        self.video_cap, self.decode_hw_device = video_decoder.open_capture(vd_path)
         # 通过视频路径获取视频名称
         self.vd_name = Path(self.video_path).stem
         # 临时存储文件夹
@@ -120,6 +122,8 @@ class SubtitleExtractor:
             # 打印视频帧数与帧率
             self.append_output(f"  {tr['Main']['FrameCount']}：{self.frame_count}"
                   f"  |  {tr['Main']['FrameRate']}：{self.fps}")
+            # 打印视频解码方式（软解 / D3D11 硬解）
+            self.append_output(f"  视频解码: {video_decoder.describe(self.decode_hw_device)}")
             # 打印加载模型信息
             self.append_output(f"  OCR 后端: {config.ocrBackend.value}  |  检测模型: {config.detModelTier.value} / 识别模型: {config.modelTier.value} (PP-OCRv6 ONNX)")
             self.append_output('-----------------------------')
@@ -206,7 +210,8 @@ class SubtitleExtractor:
             
         # 确保视频已打开
         if not self.video_cap.isOpened():
-            self.video_cap = cv2.VideoCapture(self.video_path)
+            self.video_cap, self.decode_hw_device = video_decoder.open_capture(
+                self.video_path, self.frame_count, self.fps)
             
         # 将视频指针设置到第一帧
         # self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -467,7 +472,7 @@ class SubtitleExtractor:
         watermark_areas = self._detect_watermark_area()
 
         # 随机选择一帧, 将所水印区域标记出来，用户看图判断是否是水印区域
-        cap = cv2.VideoCapture(self.video_path)
+        cap, _ = video_decoder.open_capture(self.video_path, self.frame_count, self.fps)
         ret, sample_frame = False, None
         for i in range(10):
             frame_no = random.randint(int(self.frame_count * 0.1), int(self.frame_count * 0.9))
@@ -528,7 +533,7 @@ class SubtitleExtractor:
         subtitle_area = self._detect_subtitle_area()[0][0]
 
         # 随机选择一帧，将所水印区域标记出来，用户看图判断是否是水印区域
-        cap = cv2.VideoCapture(self.video_path)
+        cap, _ = video_decoder.open_capture(self.video_path, self.frame_count, self.fps)
         ret, sample_frame = False, None
         for i in range(10):
             frame_no = random.randint(int(self.frame_count * 0.1), int(self.frame_count * 0.9))

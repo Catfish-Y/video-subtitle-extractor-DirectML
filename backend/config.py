@@ -2,18 +2,19 @@
 import os
 import json
 from pathlib import Path
-from qfluentwidgets import (qconfig, ConfigItem, QConfig, OptionsValidator, BoolValidator, OptionsConfigItem, 
+from qfluentwidgets import (qconfig, ConfigItem, QConfig, OptionsValidator, BoolValidator, OptionsConfigItem,
                             EnumSerializer, RangeValidator, RangeConfigItem, ConfigValidator)
 from backend.tools.constant import SubtitleArea, VideoSubFinderDecoder
+from backend.tools.video_decoder import is_valid_decoder_id
 import configparser
 
 # 项目版本号
-VERSION = "3.0.0"
+VERSION = "3.0.1"
 PROJECT_HOME_URL = "https://github.com/Catfish-Y/video-subtitle-extractor-DirectML"
 PROJECT_ISSUES_URL = PROJECT_HOME_URL + "/issues"
 PROJECT_RELEASES_URL = PROJECT_HOME_URL + "/releases"
 PROJECT_UPDATE_URLS = [
-    # /releases/latest 会跳过 prerelease/draft；3.0.0 当前为预发布版，
+    # /releases/latest 会跳过 prerelease/draft；3.0.x 当前为预发布版，
     # 故优先用 /releases 列表端点（由 version_service 优先取正式版、否则取预发布版）。
     "https://api.github.com/repos/Catfish-Y/video-subtitle-extractor-DirectML/releases",
     "https://api.github.com/repos/Catfish-Y/video-subtitle-extractor-DirectML/releases/latest",
@@ -21,6 +22,24 @@ PROJECT_UPDATE_URLS = [
 ] 
 # 硬件加速选项开关
 HARDWARD_ACCELERATION_OPTION = True
+
+
+class _DecoderIdValidator(ConfigValidator):
+    """视频解码器 id 校验器：auto / sw / d3d11:n / qsv:n / nvdec:n。
+
+    硬解选项在程序启动时按实际硬件能力探测生成（见 video_decoder.probe_decoders），
+    因此这里只做格式校验，不枚举具体设备；非法值修正为 auto。
+    options 属性供 GUI 构建下拉框使用，探测完成后由界面代码更新为实际选项。
+    """
+
+    def __init__(self):
+        self.options = ['auto', 'sw']
+
+    def validate(self, value):
+        return is_valid_decoder_id(value)
+
+    def correct(self, value):
+        return value if self.validate(value) else 'auto'
 
 # 读取界面语言配置
 tr = configparser.ConfigParser()
@@ -98,9 +117,15 @@ class Config(QConfig):
     # OCR 识别模型档位（rec）：tiny=极速 / small=均衡 / medium=精准
     modelTier = OptionsConfigItem("Main", "ModelTier", "small",
                                   OptionsValidator(["tiny", "small", "medium"]))
-    # 指定 DML 设备索引（留空自动选择；预置 0-7 覆盖常见多 GPU 场景）
+    # 指定 DML 设备索引（留空自动选择；预置 0-7 覆盖常见多 GPU 场景。
+    # GUI 只展示实际枚举到的设备；索引语义 = onnx_ocr.get_dml_ep_devices 顺序）
     dmlDeviceId = OptionsConfigItem(
         "Main", "DmlDeviceId", "", OptionsValidator(["", "0", "1", "2", "3", "4", "5", "6", "7"]))
+    # 视频硬件解码：auto=基准测试择优 / sw=软件解码 /
+    # d3d11:n=D3D11硬解(DXGI索引n) / qsv:n=Intel QSV / nvdec:n=NVIDIA NVDEC。
+    # 具体可选硬解器在启动时按实际硬件探测（video_decoder.probe_decoders），
+    # 旧值 on→auto、off→sw 由迁移逻辑处理。
+    videoHwDecode = OptionsConfigItem("Main", "VideoHwDecode", "auto", _DecoderIdValidator())
     # 是否使用硬件加速
     hardwareAcceleration = ConfigItem("Main", "HardwareAcceleration", HARDWARD_ACCELERATION_OPTION, BoolValidator())
     # 启动时检查应用更新
@@ -146,8 +171,45 @@ def _migrate_legacy_options():
     if config.detModelTier.value not in config.detModelTier.validator.options:
         config.set(config.detModelTier, 'small')
 
+    # DML 设备索引越界（换机/驱动变化后 GPU 数变少）：重置为自动选择，
+    # 避免执行时静默回退 CPU 或绑错设备
+    raw_device = str(config.dmlDeviceId.value).strip()
+    if raw_device:
+        try:
+            from backend.tools.onnx_ocr import list_dml_devices
+            if int(raw_device) >= len(list_dml_devices()):
+                config.set(config.dmlDeviceId, '')
+        except (ValueError, TypeError, ImportError):
+            config.set(config.dmlDeviceId, '')
+
+    # 视频解码旧值迁移：on→auto（旧"强制硬解"语义由 auto 基准择优承接）、
+    # off→sw。注意 load 时 validator 已把非法旧值静默改成 auto，
+    # 所以必须读原始 JSON 才能还原用户真正保存过的 off。
+    raw_hw = str(raw.get('VideoHwDecode', '')).strip()
+    if raw_hw == 'off':
+        config.set(config.videoHwDecode, 'sw')
+    elif raw_hw == 'on':
+        config.set(config.videoHwDecode, 'auto')
+
 
 _migrate_legacy_options()
+
+
+def validate_decoder_selection():
+    """用启动探测结果核对已保存的解码器选择，失效则重置为 auto。
+
+    由 GUI 在后台探测完成后调用（换机/驱动变化后原硬解设备可能不存在）。
+    同时把 configItem.options 更新为实际可用选项，供下拉框重建使用。
+    返回探测到的解码器列表 [{'id','label','kind','device'}]。
+    """
+    from backend.tools.video_decoder import probe_decoders
+    decoders = probe_decoders()
+    ids = [d['id'] for d in decoders]
+    config.videoHwDecode.validator.options = ['auto'] + ids
+    if config.videoHwDecode.value not in config.videoHwDecode.validator.options:
+        config.set(config.videoHwDecode, 'auto')
+    return decoders
+
 
 # 读取界面语言配置
 tr = configparser.ConfigParser()

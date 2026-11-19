@@ -9,12 +9,13 @@ from qfluentwidgets import (ScrollArea, ExpandLayout, CardWidget, SubtitleLabel,
                            FluentIcon, NavigationWidget, NavigationItemPosition,
                            SettingCardGroup, RangeSettingCard, SwitchSettingCard,
                            HyperlinkCard, PrimaryPushSettingCard, ComboBoxSettingCard, PushSettingCard,
-                           MessageBox, MessageBoxBase, BodyLabel, HyperlinkLabel, InfoBar)
-from backend.config import config, tr, VERSION, PROJECT_HOME_URL, PROJECT_ISSUES_URL, PROJECT_RELEASES_URL
+                           MessageBox, MessageBoxBase, BodyLabel, HyperlinkLabel, InfoBar, qconfig)
+from backend.config import (config, tr, VERSION, PROJECT_HOME_URL, PROJECT_ISSUES_URL,
+                            PROJECT_RELEASES_URL, validate_decoder_selection)
 from backend.tools.version_service import VersionService
 from backend.tools.concurrent import TaskExecutor
 from backend.tools.constant import VideoSubFinderDecoder
-from backend.tools import env_check
+from backend.tools import env_check, video_decoder
 
 
 def _t(key, default):
@@ -140,6 +141,7 @@ class AdvancedSettingInterface(ScrollArea):
 
         self.video_sub_finder_group.addSettingCard(self.video_sub_finder_cpu_cores)
         self.video_sub_finder_group.addSettingCard(self.video_sub_finder_decoder)
+        self.video_sub_finder_group.addSettingCard(self.video_hw_decode)
         self.expandLayout.addWidget(self.video_sub_finder_group)
 
         self.dev_group.addSettingCard(self.debug_ocr_loss)
@@ -305,6 +307,22 @@ class AdvancedSettingInterface(ScrollArea):
             texts=[item.value for item in VideoSubFinderDecoder],
             parent=self.video_sub_finder_group
         )
+        # 视频硬件解码（OpenCV 读帧路径：预览/抽帧/OCR帧读取）
+        # 选项 = 自动 + 软件解码 + 启动时探测到的各硬解器（D3D11/QSV/NVDEC）。
+        # 探测在后台线程进行，完成后 _refresh_decode_options 重建下拉项；
+        # 若已保存的硬解选择在本次启动中失效，validate_decoder_selection 会重置为 auto。
+        self.video_hw_decode = ComboBoxSettingCard(
+            configItem=config.videoHwDecode,
+            icon=FluentIcon.SPEED_HIGH,
+            title=_t('VideoHwDecode', 'Video hardware decoding'),
+            content=_t('VideoHwDecodeDesc', 'Auto = benchmark and pick the faster one'),
+            texts=self._decode_option_texts(config.videoHwDecode.validator.options),
+            parent=self.video_sub_finder_group
+        )
+        if video_decoder.probe_done():
+            self._refresh_decode_options(video_decoder.probe_decoders())
+        else:
+            TaskExecutor.runTask(validate_decoder_selection).then(self._refresh_decode_options)
         # 输出丢失的字幕帧
         self.debug_ocr_loss = SwitchSettingCard(
             configItem=config.debugOcrLoss,
@@ -358,6 +376,43 @@ class AdvancedSettingInterface(ScrollArea):
             content=tr["Setting"]["ProjectLinkDesc"],
             parent=self.about_group
         )
+
+    def _decode_option_texts(self, options):
+        """把解码器 id 列表翻译成下拉框显示文本（与 options 一一对应）。"""
+        labels = {d['id']: d['label'] for d in video_decoder.probe_decoders()} \
+            if video_decoder.probe_done() else {}
+        texts = []
+        for opt in options:
+            if opt == 'auto':
+                texts.append(_t('VideoHwDecodeAuto', 'Auto'))
+            elif opt == 'sw':
+                texts.append(_t('VideoHwDecodeSw', 'Software decoding'))
+            else:
+                texts.append(labels.get(opt, opt))
+        return texts
+
+    def _refresh_decode_options(self, decoders):
+        """探测完成后重建硬解下拉项（主线程回调）。
+
+        ComboBoxSettingCard 构造时把 options 与 texts 固化成 optionToText，
+        之后不会随 validator.options 变化，因此必须清空重填并重新同步当前值。
+        """
+        options = ['auto'] + [d['id'] for d in decoders]
+        config.videoHwDecode.validator.options = options
+        texts = self._decode_option_texts(options)
+        combo = self.video_hw_decode.comboBox
+        combo.blockSignals(True)
+        combo.clear()
+        self.video_hw_decode.optionToText = {}
+        for text, opt in zip(texts, options):
+            combo.addItem(text, userData=opt)
+            self.video_hw_decode.optionToText[opt] = text
+        current = qconfig.get(config.videoHwDecode)
+        if current not in self.video_hw_decode.optionToText:
+            current = 'auto'
+            config.set(config.videoHwDecode, 'auto')
+        combo.setCurrentText(self.video_hw_decode.optionToText[current])
+        combo.blockSignals(False)
 
     def _add_status_light(self):
         """把状态灯放到【模型检测】标题文字右侧，垂直居中对齐。"""

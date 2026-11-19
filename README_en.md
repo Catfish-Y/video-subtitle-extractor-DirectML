@@ -95,9 +95,27 @@ pip install -r requirements.txt
 
 The "Basic Settings" page offers:
 - **OCR Backend**: `auto` (DML when available), `cpu`, `dml`;
-- **Model Tier**: Light / Precise;
-- **DML Device**: pick a detected GPU or auto-select;
-- **Hardware Acceleration** master switch: off forces CPU.
+- **Model Tier**: detection / recognition models each pick Tiny / Small / Medium independently;
+- **DML Device**: pick the GPU used for OCR (only real adapters are listed) or auto-select.
+  The selected device is the one actually used; the run log prints
+  "DirectML @ <adapter name>" so you can verify. The dropdown width is fixed to
+  half the card width; long adapter names are elided (hover for the full name)
+  so they never overflow the interface;
+- **Hardware Acceleration** master switch: off forces CPU (both OCR and video decoding).
+
+The "Advanced Settings" page also offers **Video hardware decoding**, whose options
+are probed from the actual hardware at startup:
+- **Auto**: benchmarks software vs every available hardware decoder when a video is
+  opened and picks the faster one (default);
+- **Software decoding**: always software;
+- **D3D11 · <adapter>**: D3D11VA/DXVA2 decoding, generic to any GPU (listed per DXGI adapter);
+- **Intel QSV · <adapter>**: Intel Quick Sync (only shown on Intel GPUs);
+- **NVIDIA NVDEC · <adapter>**: NVIDIA NVDEC/CUDA (only shown on NVIDIA GPUs).
+
+Unsupported formats, failed init or abnormal devices fall back to software automatically.
+Note: OCR needs CPU-side frames, so the GPU→CPU readback after hardware decoding adds
+overhead — for common H.264 video software decoding is often faster. Keep "Auto" and let
+the program decide by measurement rather than forcing hardware decoding.
 
 #### 5. Run the Program
 
