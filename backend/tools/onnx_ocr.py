@@ -7,15 +7,17 @@ PP-OCRv6 ONNX 模型 + onnxruntime 的 ``DmlExecutionProvider`` 完成检测与�
 并提供与 :class:`backend.tools.ocr.OcrRecogniser` 完全一致的 ``predict`` 接口。
 
 模型档位（与抽帧模式 mode 正交）：
-- ``light``（轻量）：det ``PP-OCRv6_small_det`` + rec ``PP-OCRv6_tiny_rec``，速度快。
-- ``precise``（精准）：det ``PP-OCRv6_small_det`` + rec ``PP-OCRv6_small_rec``，识别更准。
-v6 的检测模型只有 small 档提供 ONNX，故两档共用同一 det，差异在 rec。
+- det（检测模型）：从帧图像中定位文字框；rec（识别模型）：把文字框识别成文字。
+  两者在模型层面完全解耦，各有 ``tiny`` / ``small`` / ``medium`` 三档，由
+  ``detModelTier`` / ``modelTier`` 两个配置项分别选择，可自由混搭。
+- 三档 det + 三档 rec 共 6 个 ONNX 模型随发布包一起分发（``models/``），
+  开箱即用；环境变量 ``VSE_ONNX_MODEL_DIR`` 可覆盖模型目录。
 
 设计要点：
 - 前后处理（DBNet 检测后处理、CTC 解码）内联实现，不依赖 paddlex 私有 API，
   降低 PaddleX 版本升级带来的破坏风险。
-- ONNX 模型从百度官方源按需下载到用户缓存目录（默认 ``~/.paddleocr/onnx``），
-  不随仓库分发；环境变量 ``VSE_ONNX_MODEL_DIR`` 可覆盖。
+- 模型位于程序目录下的 ``models/``，随绿色版一起移动；缺失时可从官方源
+  按需下载到该目录，环境变量 ``VSE_ONNX_MODEL_DIR`` 可覆盖。
 - 若 DmlExecutionProvider 不可用或模型加载失败，构造时会抛出异常，调用方
   (:class:`OcrRecogniser`) 负责回退到 PaddlePaddle/CPU 路径。
 
@@ -40,19 +42,28 @@ _MODEL_BASE = (
     'https://paddle-model-ecology.bj.bcebos.com/'
     'paddlex/official_inference_model/paddle3.0.0'
 )
-MODEL_TIERS = ('light', 'precise')
-# v6 检测模型仅 small 档提供 ONNX，两个档位共用
-_DET_MODEL_DIR = 'PP-OCRv6_small_det_onnx'
+MODEL_TIERS = ('tiny', 'small', 'medium')
+
+# 检测模型（det）与识别模型（rec）各自独立分档，可任意组合
+_DET_MODEL_DIRS = {
+    'tiny': 'PP-OCRv6_tiny_det_onnx',
+    'small': 'PP-OCRv6_small_det_onnx',
+    'medium': 'PP-OCRv6_medium_det_onnx',
+}
 _REC_MODEL_DIRS = {
-    'light': 'PP-OCRv6_tiny_rec_onnx',
-    'precise': 'PP-OCRv6_small_rec_onnx',
+    'tiny': 'PP-OCRv6_tiny_rec_onnx',
+    'small': 'PP-OCRv6_small_rec_onnx',
+    'medium': 'PP-OCRv6_medium_rec_onnx',
 }
 
 # 官方源名称 -> 用途说明，供 GUI 提示用户下载
 MODEL_INFO = {
-    _DET_MODEL_DIR: '文本检测模型（两个档位共用）',
-    'PP-OCRv6_tiny_rec_onnx': '轻量档文本识别模型',
-    'PP-OCRv6_small_rec_onnx': '精准档文本识别模型',
+    'PP-OCRv6_tiny_det_onnx': 'Tiny（极速）文本检测模型',
+    'PP-OCRv6_small_det_onnx': 'Small（均衡）文本检测模型',
+    'PP-OCRv6_medium_det_onnx': 'Medium（精准）文本检测模型',
+    'PP-OCRv6_tiny_rec_onnx': 'Tiny（极速）文本识别模型',
+    'PP-OCRv6_small_rec_onnx': 'Small（均衡）文本识别模型',
+    'PP-OCRv6_medium_rec_onnx': 'Medium（精准）文本识别模型',
 }
 
 # 检测参数（与官方 inference.yml 的 PostProcess 保持一致）
@@ -66,12 +77,26 @@ _DET_LIMIT_SIDE_LEN = 960       # DetResizeForTest.resize_long
 _REC_IMAGE_SHAPE = (3, 48, 320)  # (C, H, W)
 
 
+def _app_root():
+    """返回程序根目录（绿色版解包后的 resources 目录）。
+
+    源码运行时 ``__file__`` 为 ``<仓库>/backend/tools/onnx_ocr.py``，
+    发布包运行时为 ``<程序目录>/resources/backend/tools/onnx_ocr.py``；
+    两种情况下 ``parents[2]`` 都是与 ``config/`` 同级的应用根目录。
+    """
+    return Path(__file__).resolve().parents[2]
+
+
 def _default_cache_dir():
-    """返回 ONNX 模型缓存根目录。"""
+    """返回 ONNX 模型缓存根目录（绿色版：程序目录下的 models 文件夹）。
+
+    模型随程序走，不写入 C 盘用户目录；环境变量 ``VSE_ONNX_MODEL_DIR``
+    仍可覆盖为任意自定义位置。
+    """
     override = os.environ.get('VSE_ONNX_MODEL_DIR')
     if override:
         return Path(override).expanduser()
-    return Path.home() / '.paddleocr' / 'onnx'
+    return _app_root() / 'models'
 
 
 def model_download_url(model_dir_name):
@@ -79,14 +104,18 @@ def model_download_url(model_dir_name):
     return f'{_MODEL_BASE}/{model_dir_name}.tar'
 
 
-def check_models(model_tier='precise', cache_dir=None):
+def check_models(model_tier='small', det_model_tier=None, cache_dir=None):
     """检查指定档位所需模型是否齐全。
 
+    :param model_tier: 识别模型档位（tiny/small/medium）
+    :param det_model_tier: 检测模型档位，None 时与识别档位相同
     返回 ``(missing, directory)``：missing 为缺失的模型目录名列表，
     directory 为模型应放置的目录（绝对路径字符串）。
     """
     cache = Path(cache_dir).expanduser() if cache_dir else _default_cache_dir()
-    required = [_DET_MODEL_DIR, _REC_MODEL_DIRS.get(model_tier, _REC_MODEL_DIRS['precise'])]
+    rec_tier = model_tier if model_tier in MODEL_TIERS else 'small'
+    det_tier = det_model_tier if det_model_tier in MODEL_TIERS else rec_tier
+    required = [_DET_MODEL_DIRS[det_tier], _REC_MODEL_DIRS[rec_tier]]
     missing = [name for name in required if not (cache / name / 'inference.onnx').exists()]
     return missing, str(cache)
 
@@ -300,24 +329,28 @@ class OnnxOcrRecogniser:
     ``predict(bgr_image) -> (dt_box, rec_res)``。
 
     :param providers: onnxruntime provider 列表；默认优先 DML，CPU 兜底。
-    :param model_dir: 可选，自定义 ONNX 模型根目录（含两个模型子目录）。
-    :param model_tier: ``light`` 或 ``precise``，决定使用 tiny/small 识别模型。
+    :param model_dir: 可选，自定义 ONNX 模型根目录（含六个模型子目录）。
+    :param model_tier: 识别模型档位 ``tiny`` / ``small`` / ``medium``。
+    :param det_model_tier: 检测模型档位，None 时与识别档位相同。
     :param dml_device_id: 可选，DML 设备索引（见 :func:`list_dml_devices`），
         ``None`` 表示由 onnxruntime 自动选择。
     :param rec_batch_size: 识别阶段每批处理的文本框数量（来自配置项）。
     :param det_only: 仅加载检测模型（供精准模式做逐帧文本框检测用）。
     """
 
-    def __init__(self, providers=None, model_dir=None, model_tier='precise',
-                 dml_device_id=None, rec_batch_size=6, det_only=False):
+    def __init__(self, providers=None, model_dir=None, model_tier='small',
+                 det_model_tier=None, dml_device_id=None, rec_batch_size=100,
+                 det_only=False):
         import onnxruntime as ort
 
         self._ort = ort
         self.det_only = det_only
-        self.rec_batch_size = max(1, int(rec_batch_size or 6))
+        self.rec_batch_size = max(1, int(rec_batch_size or 100))
         if model_tier not in MODEL_TIERS:
-            model_tier = 'precise'
+            model_tier = 'small'
         self.model_tier = model_tier
+        det_tier = det_model_tier if det_model_tier in MODEL_TIERS else model_tier
+        self.det_model_tier = det_tier
         available = ort.get_available_providers()
         if providers is None:
             providers = [p for p in ('DmlExecutionProvider', 'CPUExecutionProvider')
@@ -338,7 +371,7 @@ class OnnxOcrRecogniser:
         self.providers = formatted
 
         self.cache_dir = Path(model_dir).expanduser() if model_dir else _default_cache_dir()
-        self.det_path = _download_model(_DET_MODEL_DIR, self.cache_dir)
+        self.det_path = _download_model(_DET_MODEL_DIRS[det_tier], self.cache_dir)
 
         session_options = ort.SessionOptions()
         self.det_session = ort.InferenceSession(

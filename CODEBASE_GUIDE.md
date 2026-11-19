@@ -74,9 +74,9 @@ flowchart LR
 - 进度总量 `300` = 抽帧 `100` + OCR `100` + 后处理 `100`。
 - 任务元组：`(总帧数, 当前帧号, dt_box, rec_res, total_ms, subtitle_area)`。
 - OCR 原始结果落盘 `output/<视频名>/subtitle/raw.txt`；最终字幕在视频同目录（可由 `saveDirectory` 覆盖）。
-- **模型档位**（与 mode 正交）：`light`=det small + rec tiny；`precise`=det small + rec small。
+- **模型档位**（与 mode 正交）：det 与 rec 各有 `tiny`/`small`/`medium` 三档，分别由 `detModelTier` 与 `modelTier` 选择，可自由混搭；6 个模型随包分发。
 - **后端**：`auto`（有 DML 设备则用 DML）、`cpu`、`dml`；总开关 `hardwareAcceleration` 关闭时强制 CPU。
-- ONNX 模型下载到 `~/.paddleocr/onnx/`（`VSE_ONNX_MODEL_DIR` 可覆盖），不入库。
+- ONNX 模型下载到程序目录下的 `models/`（绿色版便携，不写 C 盘；`VSE_ONNX_MODEL_DIR` 可覆盖），不入库。
 
 ### 跨模块调用关系
 
@@ -1031,13 +1031,13 @@ flowchart TD
 | 名称 | 行号 | 说明 |
 |------|------|------|
 | `_MODEL_BASE` | 39-42 | 官方 ONNX 模型下载基址（百度 bos） |
-| `MODEL_TIERS` | 43 | 档位元组 `('light', 'precise')` |
+| `MODEL_TIERS` | 45 | 档位元组 `('tiny', 'small', 'medium')` |
 | `_DET_MODEL_DIR` | 45 | 检测模型目录名 `PP-OCRv6_small_det_onnx`（两档共用） |
 | `_REC_MODEL_DIRS` | 46-49 | `light→PP-OCRv6_tiny_rec_onnx`、`precise→PP-OCRv6_small_rec_onnx` |
 | `MODEL_INFO` | 52-56 | 官方源目录名 → 用途说明，供 GUI 提示下载 |
 | 检测参数 | 59-63 | `_DET_THRESH=0.3`、`_DET_BOX_THRESH=0.6`、`_DET_UNCLIP_RATIO=1.5`、`_DET_MAX_CANDIDATES=1000`、`_DET_LIMIT_SIDE_LEN=960` |
 | `_REC_IMAGE_SHAPE` | 66 | 识别输入 `(C,H,W)=(3,48,320)` |
-| `_default_cache_dir` | 69-74 | 模型缓存根目录：`VSE_ONNX_MODEL_DIR` 覆盖，否则 `~/.paddleocr/onnx` |
+| `_app_root` / `_default_cache_dir` | 69-84 | 程序根目录（`onnx_ocr.py` 的 `parents[2]`，即 resources/）；模型缓存根目录默认 `程序目录/models`，`VSE_ONNX_MODEL_DIR` 可覆盖 |
 | `model_download_url` | 77-79 | 返回某模型目录名的官方下载 URL（`{base}/{name}.tar`） |
 | `check_models` | 82-91 | 检查指定档位模型是否齐全，返回 `(missing, directory)` |
 | `list_dml_devices` | 94-119 | 枚举 DML 设备，返回含 `index/name/vendor_id/device_id` 的字典列表 |
@@ -1067,9 +1067,9 @@ flowchart TD
   - 运行时依赖 `onnxruntime`、`cv2`、`numpy`、`pyclipper`（可选）、`yaml`。
 
 - **实现细节**：
-  - **档位**：`MODEL_TIERS=('light','precise')`；两档共用 det `PP-OCRv6_small_det`，差异仅在 rec（light=tiny / precise=small），非法档位在 `OnnxOcrRecogniser.__init__` 回退为 `precise`（318-319）。
+  - **档位**：`MODEL_TIERS=('tiny','small','medium')`；det 与 rec 各有三档，由 `detModelTier`/`modelTier` 独立选择；非法档位回退为 `small`。
   - **providers**：未显式传入时按 `DmlExecutionProvider → CPUExecutionProvider` 中可用项构造，且至少保留 CPU（321-329）；指定 `dml_device_id` 时把 DML provider 转成 `(name, {'device_id': str(id)})`（331-338）；`active_provider` 取 `det_session.get_providers()[0]`（347）。
-  - **模型缓存**：默认 `~/.paddleocr/onnx`，`VSE_ONNX_MODEL_DIR` 可覆盖（69-74）。`check_models` 以各模型目录下是否存在 `inference.onnx` 判定齐全（90）。`_download_model` 下载 `.tar` 并解包，解包前校验成员路径必须位于目标目录内以防路径穿越（139-143），缺 `inference.onnx` 则抛错（145-146）。
+  - **模型缓存**：默认 `程序目录/models`（绿色版便携，与 `config/` 同级），`VSE_ONNX_MODEL_DIR` 可覆盖（69-84）。`check_models` 以各模型目录下是否存在 `inference.onnx` 判定齐全（90）。`_download_model` 下载 `.tar` 并解包，解包前校验成员路径必须位于目标目录内以防路径穿越（139-143），缺 `inference.onnx` 则抛错（145-146）。
   - **字典**：`_read_char_dict` 用 `yaml.safe_load` 解析 `inference.yml` 的 `PostProcess.character_dict`（158-161），避免手工切分把引号读进字典；无 PyYAML 时逐行去成对引号回退（163-179）；最终 `['blank'] + chars`，若不含空格再追加 `' '`（184-187），与 CTCLabelDecode 的 `add_special_char` / `use_space_char` 行为对齐。
   - **检测后处理**：`_DBPostProcess.__call__` 阈值分割 → `findContours` → 限 `max_candidates` → `_mini_boxes` + 短边 >3 → `_box_score_fast` 置信度过滤 → `_unclip` 外扩 → 缩放回原图并 clip（201-230）。
   - **识别批处理**：`_prepare_rec_image` 将框缩放到高 48、宽按比例且 ≤3200，减 0.5 除 0.5 归一化后 pad 到 `(3,48,target_w)`；`_rec_predict_batch` 按 `rec_batch_size`（`max(1, ...)`，317）分批，批内 pad 到最大宽度（408-412），逐条 CTC 解码（414-415）。
@@ -2449,7 +2449,7 @@ flowchart TD
 | **PP-OCRv5 → v6** | 模型全部升级到 PP-OCRv6 ONNX（det small + rec tiny/small）；字典与后处理兼容，已验证识别。 |
 | **统一 ONNX 后端** | 移除 PaddleOCR / PaddlePaddle 依赖，CPU 与 DML 后端共用 `onnx_ocr.py`，仅 provider 不同。 |
 | **仅保留 CPU / DML** | 删除 CUDA 检测、VSF 的 `--use_cuda`、4 个 CUDA workflow、makedist 的 cuda 参数；仅支持 Windows。 |
-| **模型档位独立** | 新增 `modelTier`（light/precise），与抽帧 `mode` 正交，可自由组合。 |
+| **模型档位独立** | det/rec 各有三档（tiny/small/medium），由 `detModelTier`/`modelTier` 独立选择，与抽帧 `mode` 正交，可自由组合；6 个模型随发布包分发。 |
 | **DML 设备可选** | 新增 `list_dml_devices()` 枚举设备，`dmlDeviceId` 配置可指定具体 GPU 的 `device_id`。 |
 | **启动检测 + 一键下载** | `env_check.py` 在 GUI 启动时检测模型齐全性与 DML 设备；缺失时提示下载 URL/目录并提供一键下载。 |
 | **配置项全部生效** | 32 个配置项当前全部被后端读取；`recBatchNumber` → 识别批大小，`maxBatchSize` → 帧预取队列容量。 |

@@ -41,6 +41,16 @@ _UNUSED_VSF_FILES = (
     "cudart64_12.dll",
 )
 
+# 六个 ONNX 模型随绿色版一起分发，缺一不可
+_REQUIRED_MODELS = (
+    "PP-OCRv6_tiny_det_onnx",
+    "PP-OCRv6_small_det_onnx",
+    "PP-OCRv6_medium_det_onnx",
+    "PP-OCRv6_tiny_rec_onnx",
+    "PP-OCRv6_small_rec_onnx",
+    "PP-OCRv6_medium_rec_onnx",
+)
+
 # onnxruntime-directml 需要较新的 MSVC 运行库，QPT 内置版本过旧
 _CRT_DLLS = (
     "msvcp140.dll",
@@ -105,6 +115,16 @@ def _post_process(save_path):
         vsf_dir = os.path.join(resources, "backend", "subfinder", "windows")
         for name in _UNUSED_VSF_FILES:
             _remove(os.path.join(vsf_dir, name))
+
+        # 3.5) 校验六个 ONNX 模型都已随包打入，避免 release 启动后模型检测报缺失
+        models_dir = os.path.join(resources, "models")
+        absent = [name for name in _REQUIRED_MODELS
+                  if not os.path.isfile(os.path.join(models_dir, name, "inference.onnx"))]
+        if absent:
+            raise RuntimeError(
+                f"[{variant}] 缺少随包分发的 ONNX 模型: {', '.join(absent)}；"
+                "请确认仓库根目录 models/ 下模型齐全"
+            )
 
         # 4) 校验关键依赖的 wheel 确实下载到 opt/packages，缺失时立即失败。
         #    QPT 在目标机首次启动时才把 wheel 安装进 site-packages，因此构建阶段

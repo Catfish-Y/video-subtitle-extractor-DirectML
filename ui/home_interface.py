@@ -5,10 +5,10 @@ import multiprocessing
 import time
 import traceback
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
-from PySide6.QtCore import Slot, QRect, Signal
+from PySide6.QtCore import Slot, QRect, Signal, Qt
 from PySide6.QtGui import QTextCharFormat, QColor
 from PySide6 import QtWidgets
-from qfluentwidgets import (PushButton, CardWidget, PlainTextEdit, FluentIcon)
+from qfluentwidgets import (PushButton, CardWidget, PlainTextEdit, FluentIcon, SmoothScrollArea)
 from ui.setting_interface import SettingInterface
 from ui.component.video_display_component import VideoDisplayComponent
 from ui.component.task_list_component import TaskListComponent, TaskStatus, TaskOptions
@@ -84,17 +84,30 @@ class HomeInterface(QWidget):
         output_container.setLayout(output_layout)
         left_layout.addWidget(output_container)
 
-        main_layout.addLayout(left_layout, 2)
+        main_layout.addLayout(left_layout, 3)
 
         # 右侧设置区域
         right_layout = QVBoxLayout()
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(8)
 
-        # 设置容器
+        # 设置容器：放进滚动区域，卡片保持自己的固定高度与均匀间距，
+        # 空间不足时滚动而不是把卡片压缩到互相重叠。
         settings_container = CardWidget(self)
         settings_container.setLayout(SettingInterface(settings_container))
-        right_layout.addWidget(settings_container)
-        
+        settings_container.setMinimumWidth(0)
+        settings_scroll = SmoothScrollArea(self)
+        settings_scroll.setWidget(settings_container)
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        settings_scroll.setMinimumHeight(200)
+        settings_scroll.setMinimumWidth(320)
+        # 面板高度按卡片高度/间距精确适配：空间充足时最多显示完整 9 张卡片，
+        # 窗口变小时由布局压缩并出现滚动条；剩余空间让给下方任务列表。
+        # +8px 缓冲抵消滚动区边框，避免刚好差几像素时出现滚动条。
+        settings_scroll.setMaximumHeight(SettingInterface.content_height() + 8)
+        right_layout.addWidget(settings_scroll, 8)
+
         # 添加任务列表容器
         task_list_container = CardWidget(self)
         task_list_layout = QHBoxLayout()
@@ -105,12 +118,13 @@ class HomeInterface(QWidget):
         self.task_list_component.task_deleted.connect(self.on_task_deleted)
         task_list_layout.addWidget(self.task_list_component)
         task_list_container.setLayout(task_list_layout)
+        task_list_container.setMinimumHeight(70)
         right_layout.addWidget(task_list_container, 1)  # 占满剩余空间
         
         # 操作按钮容器
         button_container = CardWidget(self)
         button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(16, 16, 16, 16)
+        button_layout.setContentsMargins(16, 10, 16, 10)
         button_layout.setSpacing(8)
         
         self.file_button = PushButton(tr['SubtitleExtractorGUI']['Open'], self)
@@ -133,7 +147,7 @@ class HomeInterface(QWidget):
         button_container.setLayout(button_layout)
         right_layout.addWidget(button_container)
 
-        main_layout.addLayout(right_layout, 1)
+        main_layout.addLayout(right_layout, 2)
     
     def on_scroll_change(self, value):
         """监控滚动条位置变化"""

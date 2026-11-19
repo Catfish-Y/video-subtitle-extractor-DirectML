@@ -75,17 +75,18 @@ pip install -r requirements.txt
 
 ##### (2) 模型下载与档位
 
-- OCR 使用官方 PP-OCRv6 ONNX 模型，分为两个档位（与抽帧模式正交，可在 GUI 中自由组合）：
-  - **轻量档**：`PP-OCRv6_small_det` + `PP-OCRv6_tiny_rec`，速度优先；
-  - **精准档**：`PP-OCRv6_small_det` + `PP-OCRv6_small_rec`，准确度优先。
-- 模型从百度官方源按需下载到 `~/.paddleocr/onnx/`（不随仓库分发），可用环境变量
-  `VSE_ONNX_MODEL_DIR` 覆盖。GUI 启动时会检测模型是否齐全：缺失时会提示所需模型、
-  下载地址与存放目录，并提供「一键下载缺失模型」按钮。
+- OCR 使用官方 PP-OCRv6 ONNX 模型。det（检测模型，负责定位文字框）与 rec（识别模型，
+  负责把文字框识别成文字）两类模型相互解耦，各有 Tiny（极速）/ Small（均衡）/ Medium（精准）
+  三档，GUI 中分别由「检测模型档位」「识别模型档位」选择，可自由组合。「识别模式」只控制
+  抽帧策略：快速=VideoSubFinder 抽帧，精准=逐帧 det 检测，无「自动」选项。
+- 6 个模型（3 档 det + 3 档 rec）已随发布包一起分发，开箱即用，位于程序目录下的 `models/`；
+  可用环境变量 `VSE_ONNX_MODEL_DIR` 覆盖模型目录。GUI 启动时会检测当前所选档位的模型是否齐全，
+  缺失时状态灯变红，点击「模型检测」卡片会弹出下载地址与存放目录，链接可在浏览器打开。
 - 也可手动下载：
   ```
   https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/<模型名>.tar
   ```
-  将 tar 解压到 `~/.paddleocr/onnx/` 下，形成 `<模型名>/inference.onnx` 与 `inference.yml`。
+  将 tar 解压到程序目录的 `models/` 下，形成 `models/<模型名>/inference.onnx` 与 `inference.yml`。
 
 ##### (3) GUI 中的后端与设备选择
 

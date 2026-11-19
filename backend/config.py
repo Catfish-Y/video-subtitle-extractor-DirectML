@@ -1,5 +1,6 @@
 
 import os
+import json
 from pathlib import Path
 from qfluentwidgets import (qconfig, ConfigItem, QConfig, OptionsValidator, BoolValidator, OptionsConfigItem, 
                             EnumSerializer, RangeValidator, RangeConfigItem, ConfigValidator)
@@ -53,14 +54,14 @@ class Config(QConfig):
 
     # 字幕语言设置
     language = OptionsConfigItem("Main", "Language", "ch", OptionsValidator([name for name in tr["Language"]]))
-    # 识别模式设置
-    mode = OptionsConfigItem("Main", "Mode", "fast",  OptionsValidator(["auto", "fast", "accurate"]))
+    # 识别模式（抽帧策略）：fast=VideoSubFinder 抽帧 / accurate=逐帧 det 检测
+    mode = OptionsConfigItem("Main", "Mode", "fast",  OptionsValidator(["fast", "accurate"]))
     # 是否生成TXT文本字幕
     generateTxt = ConfigItem("Main", "GenerateTxt", False, BoolValidator())
-    # 每张图中同时识别6个文本框中的文本，GPU显存越大，该数值可以设置越大
-    recBatchNumber = RangeConfigItem("Main", "RecBatchNumber", 6, RangeValidator(1, 100))
-    # DB算法每个batch识别多少张，默认为10
-    maxBatchSize = RangeConfigItem("Main", "MaxBatchSize", 10, RangeValidator(1, 256))
+    # 识别阶段每批处理的文本框数量，显存越大可设越大
+    recBatchNumber = RangeConfigItem("Main", "RecBatchNumber", 100, RangeValidator(1, 2000))
+    # OCR 帧预取队列容量
+    maxBatchSize = RangeConfigItem("Main", "MaxBatchSize", 100, RangeValidator(1, 2000))
     # 字幕出现区域
     subtitleArea = OptionsConfigItem("Main", "SubtitleArea", SubtitleArea.UNKNOWN, OptionsValidator(SubtitleArea), EnumSerializer(SubtitleArea))
     # 每一秒抓取多少帧进行OCR识别
@@ -91,8 +92,12 @@ class Config(QConfig):
     wordSegmentation = ConfigItem("Main", "WordSegmentation", True, BoolValidator())
     # OCR 执行后端：auto=自动(DML优先) / cpu / dml
     ocrBackend = OptionsConfigItem("Main", "OcrBackend", "auto", OptionsValidator(["auto", "cpu", "dml"]))
-    # OCR 模型档位：light=轻量(tiny rec) / precise=精准(small rec)
-    modelTier = OptionsConfigItem("Main", "ModelTier", "precise", OptionsValidator(["light", "precise"]))
+    # OCR 检测模型档位（det）：tiny=极速 / small=均衡 / medium=精准
+    detModelTier = OptionsConfigItem("Main", "DetModelTier", "small",
+                                     OptionsValidator(["tiny", "small", "medium"]))
+    # OCR 识别模型档位（rec）：tiny=极速 / small=均衡 / medium=精准
+    modelTier = OptionsConfigItem("Main", "ModelTier", "small",
+                                  OptionsValidator(["tiny", "small", "medium"]))
     # 指定 DML 设备索引（留空自动选择；预置 0-7 覆盖常见多 GPU 场景）
     dmlDeviceId = OptionsConfigItem(
         "Main", "DmlDeviceId", "", OptionsValidator(["", "0", "1", "2", "3", "4", "5", "6", "7"]))
@@ -110,6 +115,39 @@ class Config(QConfig):
 CONFIG_FILE = 'config/config.json'
 config = Config()
 qconfig.load(CONFIG_FILE, config)
+
+
+def _migrate_legacy_options():
+    """升级旧版本 config.json 的档位/模式值。
+
+    3.0.0 早期版本用 light/precise 表示识别档位、auto 表示识别模式；现在 det/rec
+    各自独立三档且取消了自动模式。注意 qfluentwidgets 在 load 时会把 validator
+    不接受的值**静默改成第一项**（precise→tiny），因此必须直接读原始 JSON 才能
+    拿到用户真正保存过的旧值。
+    """
+    raw = {}
+    try:
+        with open(CONFIG_FILE, encoding='utf-8') as f:
+            raw = json.load(f).get('Main', {})
+    except (OSError, ValueError, AttributeError):
+        pass
+
+    legacy_tiers = {'light': 'tiny', 'precise': 'small'}
+    raw_tier = str(raw.get('ModelTier', '')).strip()
+    if raw_tier in legacy_tiers:
+        config.set(config.modelTier, legacy_tiers[raw_tier])
+    elif config.modelTier.value not in config.modelTier.validator.options:
+        config.set(config.modelTier, 'small')
+
+    raw_mode = str(raw.get('Mode', '')).strip()
+    if raw_mode == 'auto' or config.mode.value not in config.mode.validator.options:
+        config.set(config.mode, 'fast')
+
+    if config.detModelTier.value not in config.detModelTier.validator.options:
+        config.set(config.detModelTier, 'small')
+
+
+_migrate_legacy_options()
 
 # 读取界面语言配置
 tr = configparser.ConfigParser()

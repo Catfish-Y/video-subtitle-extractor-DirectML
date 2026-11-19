@@ -25,7 +25,8 @@ class SubtitleDetect:
             except (ValueError, TypeError):
                 pass
         self.detector = OnnxOcrRecogniser(
-            providers=providers, dml_device_id=device_id, det_only=True)
+            providers=providers, dml_device_id=device_id, det_only=True,
+            det_model_tier=config.detModelTier.value)
 
     def detect_subtitle(self, img):
         """检测文本框。

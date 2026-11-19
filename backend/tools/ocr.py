@@ -40,6 +40,7 @@ class OcrRecogniser:
                          if self.hardware_accelerator.has_dml()
                          else ['CPUExecutionProvider'])
         tier = config.modelTier.value
+        det_tier = config.detModelTier.value
         device_id = None
         raw = config.dmlDeviceId.value
         if raw is not None and str(raw).strip():
@@ -47,13 +48,14 @@ class OcrRecogniser:
                 device_id = int(str(raw).strip())
             except (ValueError, TypeError):
                 device_id = None
-        return providers, tier, device_id
+        return providers, tier, det_tier, device_id
 
     def init_model(self):
-        providers, tier, device_id = self._resolve_config()
+        providers, tier, det_tier, device_id = self._resolve_config()
         recogniser = OnnxOcrRecogniser(
             providers=providers,
             model_tier=tier,
+            det_model_tier=det_tier,
             dml_device_id=device_id,
             rec_batch_size=config.recBatchNumber.value,
         )

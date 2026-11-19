@@ -9,7 +9,6 @@ import threading
 from backend.config import tr
 from backend.tools.onnx_ocr import (
     MODEL_INFO, check_models, list_dml_devices, model_download_url, _download_model,
-    _default_cache_dir,
 )
 
 
@@ -18,7 +17,8 @@ def detect_environment():
 
     {
       'dml_devices': [{'index','name',...}],
-      'model_tier': 'light'|'precise',
+      'model_tier': 'tiny'|'small'|'medium'（识别档）,
+      'det_model_tier': 'tiny'|'small'|'medium'（检测档）,
       'missing': [模型目录名],
       'model_dir': str,
       'ready': bool,
@@ -27,10 +27,12 @@ def detect_environment():
     from backend.config import config
     devices = list_dml_devices()
     tier = config.modelTier.value
-    missing, model_dir = check_models(tier)
+    det_tier = config.detModelTier.value
+    missing, model_dir = check_models(tier, det_model_tier=det_tier)
     return {
         'dml_devices': devices,
         'model_tier': tier,
+        'det_model_tier': det_tier,
         'missing': missing,
         'model_dir': model_dir,
         'ready': not missing,
@@ -53,6 +55,17 @@ def describe_missing(info):
     hint = _t('ModelMissingHint', 'Download from {0} and extract to {1}').format(
         model_download_url(info['missing'][0]), info['model_dir'])
     return _t('ModelMissing', 'Missing models: {0}').format(names) + '\n' + hint
+
+
+def model_download_items(info):
+    """返回缺失模型的下载指引列表，供 GUI 弹窗展示。
+
+    每项为 ``(显示名, 模型目录名, 下载URL)``。
+    """
+    return [
+        (MODEL_INFO.get(name, name), name, model_download_url(name))
+        for name in info['missing']
+    ]
 
 
 def download_missing_models(info, progress_callback=None, done_callback=None):

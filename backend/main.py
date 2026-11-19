@@ -111,7 +111,8 @@ class SubtitleExtractor:
             self.update_progress(ocr=0, frame_extract=0, post=0)
             self.append_output('-----------------------------')
             # 打印识别语言与识别模式
-            self.append_output(f"  {tr['Main']['RecSubLang']}：{config.language.value}  |  {tr['Main']['RecMode']}：{config.mode.value}")
+            mode_text = tr['Mode'].get(config.mode.value, config.mode.value)
+            self.append_output(f"  {tr['Main']['RecSubLang']}：{config.language.value}  |  {tr['Main']['RecMode']}：{mode_text}")
             # 如果使用GPU加速，则打印GPU加速提示
             if self.hardware_accelerator.has_accelerator():
                 self.append_output(f"  {tr['Main']['AcceleratorON'].format(self.hardware_accelerator.accelerator_name)}")
@@ -120,7 +121,7 @@ class SubtitleExtractor:
             self.append_output(f"  {tr['Main']['FrameCount']}：{self.frame_count}"
                   f"  |  {tr['Main']['FrameRate']}：{self.fps}")
             # 打印加载模型信息
-            self.append_output(f"  OCR 后端: {config.ocrBackend.value}  |  模型档位: {config.modelTier.value} (PP-OCRv6 ONNX)")
+            self.append_output(f"  OCR 后端: {config.ocrBackend.value}  |  检测模型: {config.detModelTier.value} / 识别模型: {config.modelTier.value} (PP-OCRv6 ONNX)")
             self.append_output('-----------------------------')
             # 打印视频帧提取开始提示
             self.append_output(tr['Main']['StartProcessFrame'])

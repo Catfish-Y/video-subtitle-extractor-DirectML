@@ -9,11 +9,85 @@ from qfluentwidgets import (ScrollArea, ExpandLayout, CardWidget, SubtitleLabel,
                            FluentIcon, NavigationWidget, NavigationItemPosition,
                            SettingCardGroup, RangeSettingCard, SwitchSettingCard,
                            HyperlinkCard, PrimaryPushSettingCard, ComboBoxSettingCard, PushSettingCard,
-                           MessageBox)
+                           MessageBox, MessageBoxBase, BodyLabel, HyperlinkLabel, InfoBar)
 from backend.config import config, tr, VERSION, PROJECT_HOME_URL, PROJECT_ISSUES_URL, PROJECT_RELEASES_URL
 from backend.tools.version_service import VersionService
 from backend.tools.concurrent import TaskExecutor
 from backend.tools.constant import VideoSubFinderDecoder
+from backend.tools import env_check
+
+
+def _t(key, default):
+    """读取翻译，缺失时回退默认文案。"""
+    try:
+        return tr['Setting'][key]
+    except (KeyError, TypeError):
+        return default
+
+
+class ModelStatusLight(QtWidgets.QLabel):
+    """模型检测状态灯：绿色=齐全，红色=缺失/检测失败。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(12, 12)
+        self.setObjectName('modelStatusLight')
+        self.setState(None)
+
+    def setState(self, ok):
+        if ok is None:
+            color = '#9aa0a6'
+        elif ok:
+            color = '#0f9d58'
+        else:
+            color = '#e81123'
+        self.setStyleSheet(
+            'QLabel#modelStatusLight {'
+            f'background-color: {color};'
+            'border-radius: 6px;'
+            'border: 1px solid rgba(0, 0, 0, 0.12);'
+            '}')
+
+
+class ModelMissingDialog(MessageBoxBase):
+    """缺少模型时的指引弹窗：下载地址、说明与放置目录。"""
+
+    def __init__(self, parent, info, items):
+        super().__init__(parent=parent)
+        self.widget.setMinimumWidth(520)
+
+        title = SubtitleLabel(_t('ModelMissingTitle', 'Missing OCR models'), self.widget)
+        title.setWordWrap(True)
+        self.viewLayout.addWidget(title)
+
+        what = BodyLabel(_t('ModelMissingWhat',
+                            'Download the missing models below (click to open in browser):'),
+                         self.widget)
+        what.setWordWrap(True)
+        self.viewLayout.addWidget(what)
+
+        for display, dir_name, url in items:
+            link = HyperlinkLabel(QtCore.QUrl(url), f'• {display}（{dir_name}.tar）', self.widget)
+            link.setUnderlineVisible(True)
+            link.setToolTip(url)
+            self.viewLayout.addWidget(link)
+
+        where = BodyLabel(_t('ModelMissingWhere',
+                             'Extract the archives and put the model folders under the program directory:'),
+                          self.widget)
+        where.setWordWrap(True)
+        self.viewLayout.addWidget(where)
+
+        path_label = BodyLabel(info['model_dir'], self.widget)
+        path_label.setWordWrap(True)
+        path_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        self.viewLayout.addWidget(path_label)
+
+        self.buttonLayout.removeWidget(self.cancelButton)
+        self.cancelButton.hide()
+        self.buttonLayout.setStretch(0, 1)
+        self.yesButton.setText(_t('DialogOk', 'OK'))
+
 
 class AdvancedSettingInterface(ScrollArea):
     """高级设置页面"""
@@ -44,6 +118,11 @@ class AdvancedSettingInterface(ScrollArea):
         self.setup_layout()
 
     def setup_layout(self):
+        # 从主界面迁入：界面语言与模型检测
+        self.basic_group.addSettingCard(self.interface_combo)
+        self.basic_group.addSettingCard(self.model_check_card)
+        self.expandLayout.addWidget(self.basic_group)
+
         self.advanced_group.addSettingCard(self.rec_batch_number)
         self.advanced_group.addSettingCard(self.max_batch_size)
         self.advanced_group.addSettingCard(self.subtitle_area)
@@ -78,6 +157,23 @@ class AdvancedSettingInterface(ScrollArea):
         
     def setup_ui(self):
         """设置UI"""
+        # 基本设置组（从主界面迁入的界面语言与模型检测）
+        self.basic_group = SettingCardGroup(tr["Setting"]["BasicSetting"], self.scrollWidget)
+        self.interface_combo = ComboBoxSettingCard(
+            configItem=config.interface, icon=FluentIcon.LANGUAGE,
+            title=tr["LanguageModeGUI"]["InterfaceLanguage"], content="",
+            parent=self.basic_group, texts=config.intefaceTexts.keys())
+
+        # 模型检测卡片：小字为功能简述，结果用标题右侧状态灯表示
+        self.model_check_card = PushSettingCard(
+            _t('ModelCheckButton', 'Check'), FluentIcon.DOWNLOAD,
+            tr['Setting']['ModelCheck'], _t('ModelCheckDesc', 'Check local OCR models'),
+            self.basic_group)
+        self._add_status_light()
+        self.model_check_card.clicked.connect(self._on_model_check_clicked)
+        self.env_info = None
+        self.refresh_environment()
+
         # 高级设置组
         self.advanced_group = SettingCardGroup(tr["Setting"]["AdvancedSetting"], self.scrollWidget)
         # VideoSubFinder设置组
@@ -262,6 +358,48 @@ class AdvancedSettingInterface(ScrollArea):
             content=tr["Setting"]["ProjectLinkDesc"],
             parent=self.about_group
         )
+
+    def _add_status_light(self):
+        """把状态灯放到【模型检测】标题文字右侧，垂直居中对齐。"""
+        card = self.model_check_card
+        title_label = card.titleLabel
+        title_row = QtWidgets.QWidget(card)
+        row_layout = QtWidgets.QHBoxLayout(title_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        row_layout.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        row_layout.addWidget(title_label, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        self.model_status_light = ModelStatusLight(title_row)
+        row_layout.addWidget(self.model_status_light, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        row_layout.addStretch(1)
+        card.vBoxLayout.removeWidget(title_label)
+        card.vBoxLayout.insertWidget(0, title_row, 0, QtCore.Qt.AlignLeft)
+
+    def refresh_environment(self):
+        """检测 DML 设备与模型状态，更新状态灯。"""
+        self.env_info = env_check.detect_environment()
+        ready = self.env_info['ready']
+        self.model_status_light.setState(ready)
+        if ready:
+            tip = tr['Setting']['ModelReady']
+        else:
+            names = ', '.join(env_check.MODEL_INFO.get(m, m) for m in self.env_info['missing'])
+            tip = tr['Setting']['ModelMissing'].format(names)
+        self.model_status_light.setToolTip(tip)
+        self.model_check_card.setToolTip(tip)
+        if not self.env_info['dml_devices']:
+            InfoBar.warning(
+                title=tr['Setting']['NoDmlDevice'], content='', duration=4000,
+                parent=self)
+
+    def _on_model_check_clicked(self):
+        """点击模型卡片：重新检测；缺失则弹出下载指引。"""
+        self.refresh_environment()
+        if self.env_info is None or self.env_info['ready']:
+            return
+        items = env_check.model_download_items(self.env_info)
+        dialog = ModelMissingDialog(self.window(), self.env_info, items)
+        dialog.exec()
 
     def show_message_box(self, title: str, content: str, showYesButton=False, yesSlot=None):
         """ show message box """

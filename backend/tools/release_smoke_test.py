@@ -165,10 +165,22 @@ try:
 except Exception as exc:
     failed.append(("onnxruntime", type(exc).__name__ + ": " + str(exc)))
     print("[FAIL] onnxruntime: " + str(exc), file=sys.stderr)
+# 随包分发的六个 ONNX 模型必须齐全，否则用户拿到 release 直接红灯
+for name in __MODELS__:
+    path = os.path.join(resources_dir, "models", name, "inference.onnx")
+    if os.path.isfile(path):
+        print("[ OK ] model " + name)
+    else:
+        failed.append(("model:" + name, "缺少模型文件"))
+        print("[FAIL] model " + name + ": " + path, file=sys.stderr)
 if failed:
     raise SystemExit("冒烟测试失败，共 " + str(len(failed)) + " 项：" + repr(failed))
 print("SMOKE TEST PASSED")
-""".replace("__MODULES__", repr(MODULES)).replace("__PROJECT_MODULES__", repr(PROJECT_MODULES))
+""".replace("__MODULES__", repr(MODULES)).replace("__PROJECT_MODULES__", repr(PROJECT_MODULES)) \
+    .replace("__MODELS__", repr((
+        "PP-OCRv6_tiny_det_onnx", "PP-OCRv6_small_det_onnx", "PP-OCRv6_medium_det_onnx",
+        "PP-OCRv6_tiny_rec_onnx", "PP-OCRv6_small_rec_onnx", "PP-OCRv6_medium_rec_onnx",
+    )))
 
     resources_dir = os.path.join(module_dir, "resources")
     proc = subprocess.run(

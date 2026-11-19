@@ -368,7 +368,7 @@ $RECYCLE.BIN/
 /test.py
 /test2.py
 /subtitle.ini
-# OCR 模型体积大且可再下载，整个 models 目录不入库
+# 旧版 PaddleOCR 模型目录不再使用；新版 ONNX 模型位于仓库根目录 models/，随包分发需入库
 /backend/models/
 /config/config.json
 /.claude/

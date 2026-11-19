@@ -79,15 +79,17 @@ pip install -r requirements.txt
 - Two model tiers (orthogonal to the frame-extraction mode, freely combinable in the GUI):
   - **Light**: `PP-OCRv6_small_det` + `PP-OCRv6_tiny_rec` — speed first;
   - **Precise**: `PP-OCRv6_small_det` + `PP-OCRv6_small_rec` — accuracy first.
-- Models are downloaded on demand from the official Baidu mirror to
-  `~/.paddleocr/onnx/` (not bundled), overridable via `VSE_ONNX_MODEL_DIR`.
-  On startup the GUI checks model availability: if any are missing it shows which
-  ones, the download URL and target directory, plus a "Download Missing Models" button.
+- Models are downloaded on demand from the official Baidu mirror into `models/`
+  under the program directory (portable green build - nothing is written to the C drive
+  user profile; not bundled), overridable via `VSE_ONNX_MODEL_DIR`. On startup the GUI
+  checks model availability: a status light turns red and clicking the "Model Check"
+  card opens a dialog with download links and the target directory.
 - Manual download:
   ```
   https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/<model>.tar
   ```
-  Extract into `~/.paddleocr/onnx/` so each model has `<name>/inference.onnx` and `inference.yml`.
+  Extract into `models/` under the program directory so each model has
+  `models/<name>/inference.onnx` and `inference.yml`.
 
 ##### (3) Backend and device selection in the GUI
 

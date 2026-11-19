@@ -30,7 +30,16 @@ from ui.home_interface import HomeInterface
 from ui.timeline_sync_interface import TimelineSyncInterface
 
 
-class SubtitleExtractorGUI(FluentWindow): 
+class SubtitleExtractorGUI(FluentWindow):
+    # 窗口尺寸策略：首次启动用DEFAULT尺寸，随后把尺寸/位置都夹到屏幕可用区域内。
+    # 注意：右侧设置卡片的内容标签会撑出约1871x920的布局minimumSizeHint，
+    # 小屏上窗口会被撑得比屏幕还大，必须显式 setMinimumSize 覆盖该提示。
+    DEFAULT_WINDOW_W = 1200
+    DEFAULT_WINDOW_H = 800
+    MIN_WINDOW_W = 900
+    MIN_WINDOW_H = 600
+    SCREEN_MARGIN = 40
+
     def __init__(self):
         super().__init__()
         # 禁用云母效果
@@ -111,33 +120,60 @@ class SubtitleExtractorGUI(FluentWindow):
         config.set(config.windowW, self.width())
         config.set(config.windowH, self.height())
 
+    def _screen_rect(self):
+        """当前主屏的可用区域（已扣除任务栏等）。"""
+        return QtWidgets.QApplication.primaryScreen().availableGeometry()
+
+    def _clamp_size(self, width, height):
+        """把窗口尺寸限制在屏幕可用区域内，并留出边距。"""
+        screen_rect = self._screen_rect()
+        max_w = max(400, screen_rect.width() - self.SCREEN_MARGIN)
+        max_h = max(300, screen_rect.height() - self.SCREEN_MARGIN)
+        width = max(300, min(int(width), max_w))
+        height = max(240, min(int(height), max_h))
+        return width, height
+
     def load_window_position(self):
-        # 尝试读取窗口位置
+        """读取窗口位置/大小，并保证完整落在当前屏幕内。
+
+        关键点：
+        1. 必须显式 setMinimumSize，否则布局的 minimumSizeHint(约1871x920)
+           会把窗口撑出小屏幕；这里给出一个能在小屏上放下的下限。
+        2. 首次启动（X/Y 为空）或无有效历史几何时，按默认尺寸居中显示。
+        3. 历史几何超出屏幕（如换到小屏显示器）时，夹取尺寸与左上角坐标。
+        """
+        # 覆盖布局撑起的最小尺寸，使其不超过当前屏幕可用区域
+        min_w, min_h = self._clamp_size(self.MIN_WINDOW_W, self.MIN_WINDOW_H)
+        self.setMinimumSize(min_w, min_h)
+
+        # 首次启动：按默认尺寸居中（不能只 center，否则停留在 minimumSizeHint）
         try:
             x = config.windowX.value
             y = config.windowY.value
-            width = config.windowW.value
-            height = config.windowH.value
-
             if not x or not y:
+                width, height = self._clamp_size(self.DEFAULT_WINDOW_W, self.DEFAULT_WINDOW_H)
+                self.resize(width, height)
                 self.center_window()
                 return
-
-            # 确保窗口在屏幕内
-            screen_rect = QtWidgets.QApplication.primaryScreen().availableGeometry()
-            if (x >= 0 and y >= 0 and 
-                x + width <= screen_rect.width() and 
-                y + height <= screen_rect.height()):
-                self.setGeometry(x, y, width, height)
-            else:
-                self.center_window()
         except Exception as e:
             print(e)
             self.center_window()
-    
+            return
+
+        # 有历史几何：把尺寸与位置都夹到屏幕内
+        try:
+            screen_rect = self._screen_rect()
+            width, height = self._clamp_size(config.windowW.value, config.windowH.value)
+            x = max(screen_rect.x(), min(int(x), screen_rect.x() + screen_rect.width() - width))
+            y = max(screen_rect.y(), min(int(y), screen_rect.y() + screen_rect.height() - height))
+            self.setGeometry(x, y, width, height)
+        except Exception as e:
+            print(e)
+            self.center_window()
+
     def center_window(self):
-        """将窗口居中显示"""
-        screen_rect = QtWidgets.QApplication.primaryScreen().availableGeometry()
+        """将窗口居中显示（尺寸已在 load_window_position 中限制）。"""
+        screen_rect = self._screen_rect()
         window_rect = self.frameGeometry()
         center_point = screen_rect.center()
         window_rect.moveCenter(center_point)
