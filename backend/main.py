@@ -30,6 +30,7 @@ from backend.tools.ocr import OcrRecogniser, get_coordinates
 from backend.tools import subtitle_ocr
 from backend.tools.process_manager import ProcessManager
 from backend.tools.subtitle_detect import SubtitleDetect
+from backend.tools.subtitle_crop import build_crop_region, parse_extra_areas
 from backend.tools import video_decoder
 from backend.bean.subtitle_area import SubtitleArea
 import threading
@@ -48,6 +49,9 @@ class SubtitleExtractor:
         self.lock = threading.RLock()
         # 用户指定的字幕区域位置
         self.sub_area = None
+        # 选区裁剪区域（run() 开始时按全部选区并集构造）：
+        # det/rec 只对裁剪图计算，结果坐标偏移回全帧，大幅降低算力/内存
+        self.crop_region = None
         self.hardware_accelerator = HardwareAccelerator.instance()
         # 是否使用硬件加速
         self.hardware_accelerator.set_enabled(config.hardwareAcceleration.value)
@@ -108,6 +112,12 @@ class SubtitleExtractor:
         # 记录开始运行的时间
         start_time = time.time()
         self.lock.acquire()
+        # 构造选区裁剪区域（多选区取并集包围盒 + 越界容忍边距）。
+        # 无选区/几乎全帧时为 None，后续行为与原来完全一致。
+        self.crop_region = build_crop_region(
+            self.sub_area, self.frame_width, self.frame_height,
+            deviation_rate=config.subtitleAreaDeviationRate.value / 100.0,
+            extra_areas=parse_extra_areas(self.frame_width, self.frame_height))
         try:
             # 重置进度条
             self.update_progress(ocr=0, frame_extract=0, post=0)
@@ -264,6 +274,18 @@ class SubtitleExtractor:
 
         self.video_cap.release()
 
+    def _predict_full_coords(self, frame):
+        """对帧做 det+rec，返回全帧坐标系的 (dt_box, rec_res)。
+
+        有选区裁剪时只对裁剪图计算（算力降数倍），检测框平移回全帧坐标，
+        下游 __get_area_text / AABB 过滤 / 入队结果完全无感知。
+        """
+        crop = self.crop_region
+        if crop is None:
+            return self.ocr.predict(frame)
+        dt_box, rec_res = self.ocr.predict(crop.crop(frame))
+        return crop.shift_boxes(dt_box), rec_res
+
     def extract_frame_by_det(self):
         """
         通过检测字幕区域位置提取字幕帧
@@ -292,11 +314,18 @@ class SubtitleExtractor:
             # 读取视频帧成功
             current_frame_no += 1
             tbar.update(1)
-            dt_boxes, elapse = self.sub_detector.detect_subtitle(frame)
+            # 选区裁剪前移：逐帧检测只算裁剪图（实测 1080p 底部选区
+            # 105ms→16ms），检测框偏移回全帧坐标后再做选区判定
+            crop = self.crop_region
+            det_img = crop.crop(frame) if crop is not None else frame
+            dt_boxes, elapse = self.sub_detector.detect_subtitle(det_img)
+            boxes_list = dt_boxes.tolist()
+            if crop is not None:
+                boxes_list = crop.shift_boxes(boxes_list)
             has_subtitle = False
             sub_area = self.sub_area
             if sub_area is not None:
-                coordinate_list = get_coordinates(dt_boxes.tolist())
+                coordinate_list = get_coordinates(boxes_list)
                 if coordinate_list:
                     for coordinate in coordinate_list:
                         xmin, xmax, ymin, ymax = coordinate
@@ -316,7 +345,7 @@ class SubtitleExtractor:
                 # 判断是字幕头还是尾
                 if is_finding_start_frame_no:
                     start_frame_no = current_frame_no
-                    dt_box, rec_res = self.ocr.predict(frame)
+                    dt_box, rec_res = self._predict_full_coords(frame)
                     area_text1 = "".join(self.__get_area_text((dt_box, rec_res)))
                     if start_frame_no not in compare_ocr_result_cache.keys():
                         compare_ocr_result_cache[current_frame_no] = {'text': area_text1, 'dt_box': dt_box, 'rec_res': rec_res}
@@ -875,14 +904,14 @@ class SubtitleExtractor:
         if img1_no in result_cache:
             area_text1 = result_cache[img1_no]['text']
         else:
-            dt_box, rec_res = self.ocr.predict(img1)
+            dt_box, rec_res = self._predict_full_coords(img1)
             area_text1 = "".join(self.__get_area_text((dt_box, rec_res)))
             result_cache[img1_no] = {'text': area_text1, 'dt_box': dt_box, 'rec_res': rec_res}
 
         if img2_no in result_cache:
             area_text2 = result_cache[img2_no]['text']
         else:
-            dt_box, rec_res = self.ocr.predict(img2)
+            dt_box, rec_res = self._predict_full_coords(img2)
             area_text2 = "".join(self.__get_area_text((dt_box, rec_res)))
             result_cache[img2_no] = {'text': area_text2, 'dt_box': dt_box, 'rec_res': rec_res}
         delete_no_list = []
@@ -989,6 +1018,9 @@ class SubtitleExtractor:
             'HARDWARD_ACCELERATOR': self.hardware_accelerator,
             # 帧预取队列容量（DB 每批图片数），供 OCR 生产者/消费者使用
             'MAX_BATCH_SIZE': config.maxBatchSize.value,
+            # 选区裁剪区域：生产者读帧后先裁剪再入队（省队列内存），
+            # 消费者只对裁剪图做 det/rec，坐标偏移回全帧后再过滤
+            'CROP_REGION': self.crop_region,
         }
         process, task_queue, progress_queue = subtitle_ocr.async_start(self.video_path, self.raw_subtitle_path, self.sub_area, options)
         ProcessManager.instance().add_process(process)

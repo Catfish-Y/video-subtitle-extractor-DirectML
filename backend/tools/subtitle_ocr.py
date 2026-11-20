@@ -25,9 +25,17 @@ def extract_subtitles(data, text_recogniser, img, raw_subtitles,
     # 从参数中获取检测框与检测结果
     dt_box = dt_box_arg
     rec_res = rec_res_arg
-    # 如果没有检测结果，则获取检测结果
+    # 如果没有检测结果，则获取检测结果。
+    # 选区裁剪前移：生产者已按 crop_region 裁剪入队（img 即裁剪图），
+    # 只对裁剪图做 det/rec（算力降数倍），检测框偏移回全帧坐标后
+    # 再走原有 AABB 过滤，下游行为不变。
+    crop_region = getattr(options, 'CROP_REGION', None)
     if dt_box is None or rec_res is None:
-        dt_box, rec_res = text_recogniser.predict(img)
+        if crop_region is not None:
+            dt_box, rec_res = text_recogniser.predict(img)
+            dt_box = crop_region.shift_boxes(dt_box)
+        else:
+            dt_box, rec_res = text_recogniser.predict(img)
         # rec_res格式为： ("hello", 0.997)
     # 获取文本坐标
     coordinates = get_coordinates(dt_box)
@@ -99,13 +107,16 @@ def dump_debug_info(options, line, img, loss_list, ocr_loss_debug_path, sub_area
     if loss:
         if not os.path.exists(ocr_loss_debug_path):
             os.makedirs(ocr_loss_debug_path, mode=0o777, exist_ok=True)
-        img = cv2.rectangle(img, (sub_area.xmin, sub_area.ymin), (sub_area.xmax, sub_area.ymax), constant.BGR_COLOR_BLUE, 2)
+        # img 可能是裁剪图：绘制坐标（全帧系）需减去裁剪偏移
+        crop_region = getattr(options, 'CROP_REGION', None)
+        dx, dy = (crop_region.x0, crop_region.y0) if crop_region is not None else (0, 0)
+        img = cv2.rectangle(img, (sub_area.xmin - dx, sub_area.ymin - dy), (sub_area.xmax - dx, sub_area.ymax - dy), constant.BGR_COLOR_BLUE, 2)
         for loss_info in loss_list:
             coordinate = loss_info.coordinate
             color = constant.BGR_COLOR_GREEN if loss_info.selected else constant.BGR_COLOR_RED
             text = f"[{loss_info.text}] prob:{loss_info.prob:.4f} or:{loss_info.overflow_area_rate:.2f}"
-            img = paint_chinese_opencv(img, text, pos=(coordinate[0], coordinate[2] - 30), color=color)
-            img = cv2.rectangle(img, (coordinate[0], coordinate[2]), (coordinate[1], coordinate[3]), color, 2)
+            img = paint_chinese_opencv(img, text, pos=(coordinate[0] - dx, coordinate[2] - dy - 30), color=color)
+            img = cv2.rectangle(img, (coordinate[0] - dx, coordinate[2] - dy), (coordinate[1] - dx, coordinate[3] - dy), color, 2)
         cv2.imwrite(os.path.join(os.path.abspath(ocr_loss_debug_path), f'{str(data["i"]).zfill(8)}.png'), img)
 
 
@@ -168,7 +179,7 @@ def ocr_task_consumer(ocr_queue, raw_subtitle_path, sub_area, video_path, option
                 raw_subtitle_file.write(line)
 
 
-def ocr_task_producer(ocr_queue, task_queue, progress_queue, video_path, raw_subtitle_path):
+def ocr_task_producer(ocr_queue, task_queue, progress_queue, video_path, raw_subtitle_path, crop_region=None):
     """
     生产者：负责生产用于OCR识别的数据，将需要进行ocr识别的数据加入ocr_queue中
     :param ocr_queue (current_frame_no当前帧帧号, frame 视频帧, dt_box检测框, rec_res识别结果)
@@ -176,6 +187,8 @@ def ocr_task_producer(ocr_queue, task_queue, progress_queue, video_path, raw_sub
     :param progress_queue
     :param video_path
     :param raw_subtitle_path
+    :param crop_region 选区裁剪区域（CropRegion 或 None）：读帧后先裁剪再入队，
+                       队列内存占用按选区面积比例下降（1080p 底部选区约降 80%）
     """
     # 与主进程一致：按配置选择软/硬解码（子进程内独立做基准/缓存）
     cap, hw_dev = video_decoder.open_capture(video_path)
@@ -212,6 +225,10 @@ def ocr_task_producer(ocr_queue, task_queue, progress_queue, video_path, raw_sub
                 # 根据默认字幕位置，则对视频帧进行裁剪，裁剪后处理
                 if default_subtitle_area is not None:
                     frame = frame_preprocess(default_subtitle_area, frame)
+                # 选区裁剪前移：只把选区（并集+边距）内的画面送入 OCR 队列。
+                # copy 断开与解码缓冲的视图关系，避免长期持有整帧内存。
+                if crop_region is not None:
+                    frame = crop_region.crop(frame).copy()
                 # print(f"current_frame_no: {current_frame_no}")
                 ocr_queue.put((current_frame_no, frame, dt_box, rec_res))
         except Exception as e:
@@ -236,9 +253,10 @@ def subtitle_extract_handler(task_queue, progress_queue, video_path, raw_subtitl
     # 创建一个OCR队列，容量由「DB 每批图片数」配置项决定（建议 8-20）
     max_batch = getattr(options, 'MAX_BATCH_SIZE', 10) if hasattr(options, 'MAX_BATCH_SIZE') else 10
     ocr_queue = queue.Queue(max(1, int(max_batch or 10)))
-    # 创建一个OCR事件生产者线程
+    # 创建一个OCR事件生产者线程（携带选区裁剪区域）
     ocr_event_producer_thread = Thread(target=ocr_task_producer,
-                                       args=(ocr_queue, task_queue, progress_queue, video_path, raw_subtitle_path,),
+                                       args=(ocr_queue, task_queue, progress_queue, video_path, raw_subtitle_path,
+                                             getattr(options, 'CROP_REGION', None)),
                                        daemon=True)
     # 创建一个OCR事件消费者提取线程
     ocr_event_consumer_thread = Thread(target=ocr_task_consumer,

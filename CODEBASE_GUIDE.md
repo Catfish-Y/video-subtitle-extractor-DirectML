@@ -1,7 +1,7 @@
 # VSE 代码库结构与维护指南
 
 > **文档目的**：对全部代码做逐文件、逐方法的梳理，作为日后**局部维护**与**全面重构**的共同基准。
-> **对应版本**：`backend/config.py` 中 `VERSION = "3.0.1"`（已完成缺陷修复、DirectML 接入与 PP-OCRv6 升级重构）。
+> **对应版本**：`backend/config.py` 中 `VERSION = "3.1.0"`（已完成缺陷修复、DirectML 接入、PP-OCRv6 升级、预览后台化与选区裁剪前移优化）。
 > **内容基准**：本文描述**当前磁盘上的最终代码状态**，不含变更历史。
 > **覆盖范围**：项目内全部 **41 个 Python 文件** 及 2 个 sushi bat 脚本。
 
@@ -257,7 +257,7 @@ flowchart TD
 
 | 名称 | 行号 | 说明 |
 |------|------|------|
-| `VERSION` | 10 | 版本号 `"3.0.1"`，用于窗口标题与更新比对 |
+| `VERSION` | 10 | 版本号 `"3.1.0"`，用于窗口标题与更新比对 |
 | `PROJECT_HOME_URL` / `PROJECT_ISSUES_URL` / `PROJECT_RELEASES_URL` | 11-13 | 项目主页、Issues、Releases 地址 |
 | `PROJECT_UPDATE_URLS` | 14-17 | 两个更新源（GitHub API + 加速镜像） |
 | `HARDWARD_ACCELERATION_OPTION` | 19 | 硬件加速总开关常量 `True`，**拼写保留**；作为 `hardwareAcceleration` 默认值，并被 UI 层读取 |
@@ -286,8 +286,8 @@ flowchart TD
 | 7 | `language` | OptionsConfigItem | `"ch"` | 字幕识别语言，选项取自 `tr["Language"]` | 是（setting_interface.py:25 `language_combo`） | 是 |
 | 8 | `mode` | OptionsConfigItem | `"fast"` | 抽帧/识别模式 `auto/fast/accurate` | 是（setting_interface.py:33 `mode_combo`） | 是 |
 | 9 | `generateTxt` | ConfigItem(Bool) | `False` | 是否生成 TXT 文本字幕 | 是（setting_interface.py:82） | 是 |
-| 10 | `recBatchNumber` | RangeConfigItem | `6` | 单张图同时识别的文本框数，范围 1-100 | 是（advanced_setting_interface.py:92） | 是 |
-| 11 | `maxBatchSize` | RangeConfigItem | `10` | DB 检测每个 batch 的图片数，范围 1-256 | 是（advanced_setting_interface.py:100） | 是 |
+| 10 | `recBatchNumber` | RangeConfigItem | `100` | 识别阶段每批处理的文本框数，范围 1-1000 | 是（advanced_setting_interface.py:189） | 是 |
+| 11 | `maxBatchSize` | RangeConfigItem | `100` | OCR 帧预取队列容量，范围 1-1000 | 是（advanced_setting_interface.py:197） | 是 |
 | 12 | `subtitleArea` | OptionsConfigItem(Enum) | `SubtitleArea.UNKNOWN` | 字幕大致区域枚举，Enum 序列化 | 是（advanced_setting_interface.py:108） | 是 |
 | 13 | `extractFrequency` | RangeConfigItem | `3` | 每秒抽帧进行 OCR 的帧数，范围 1-60 | 是（advanced_setting_interface.py:117） | 是 |
 | 14 | `tolerantPixelY` | RangeConfigItem | `50` | 容忍的 Y 像素偏差，范围 1-1000 | 是（advanced_setting_interface.py:125） | 是 |
@@ -698,7 +698,7 @@ flowchart TD
   - 987 `subtitle_ocr.async_start(...)` 返回 `(process, task_queue, progress_queue)`；988 注册进程；989 `manage_process(process.pid)`；990-991 保存两个队列；993 启动进度线程；994 返回 process。
 - **输出副作用**：创建子进程与两个 `multiprocessing.Queue`；注册进程；启动守护线程；打印 `StartFindSub`。
 - **调用者 / 被调用者**：`run()`(136) 调用；调用 `subtitle_ocr.async_start`、`ProcessManager.add_process`、`manage_process`。
-- **风险点**：`manage_process(self, pid)` 是空实现（GUI 猴子补丁注入）；`options` 键名 `HARDWARD_ACCELERATOR` 拼写错误但子进程沿用，不可随意改；`MAX_BATCH_SIZE` 需与 `config.maxBatchSize`（范围 1-256）匹配；进度线程 `get(block=True)` 无超时，子进程异常退出不自动结束线程。
+- **风险点**：`manage_process(self, pid)` 是空实现（GUI 猴子补丁注入）；`options` 键名 `HARDWARD_ACCELERATOR` 拼写错误但子进程沿用，不可随意改；`MAX_BATCH_SIZE` 需与 `config.maxBatchSize`（范围 1-1000）匹配；进度线程 `get(block=True)` 无超时，子进程异常退出不自动结束线程。
 
 #### `srt2txt(srt_file)` — 行号 996-1002
 - **职责**：把 SRT 导出为纯文本（每行字幕文本）。
@@ -827,7 +827,7 @@ flowchart TD
   6. **统一缓存清理**：`__delete_frame_cache`(916) 与 `empty_cache`(920) 逻辑重复；异常路径（run() 抛错）不清理缓存，建议把清理纳入 `finally`。
   7. **`manage_process` 空实现**：CLI 下 PID 不上报，外部进程生命周期不受控，建议提供默认注册到 `ProcessManager` 的实现，GUI 仅覆盖上报部分。
   8. **除零防护**：`fps` 为 0 时 `extract_frame_by_fps`(238)、`_frame_to_timecode`(686)、`_timestamp_to_frameno`(696)、`_frameno_to_milliseconds`(699)、`_compute_image_similarity`(842) 均有风险，建议在 `__init__` 读取视频元数据后统一校验。
-  9. **`MAX_BATCH_SIZE` 与配置一致性**：`options`(985) 直接取 `config.maxBatchSize.value`（范围 1-256），需与 OCR 子进程帧预取队列实现保持契约，调大时注意内存占用；键名 `HARDWARD_ACCELERATOR`(983) 拼写错误但为既有协议，改名需同步子进程。
+  9. **`MAX_BATCH_SIZE` 与配置一致性**：`options`(985) 直接取 `config.maxBatchSize.value`（范围 1-1000），需与 OCR 子进程帧预取队列实现保持契约，调大时注意内存占用；键名 `HARDWARD_ACCELERATOR`(983) 拼写错误但为既有协议，改名需同步子进程。
   10. **日志可观测性**：`append_output` 仅 `print`，无分级/落盘，CLI/GUI 混合场景下排障困难，建议接入标准日志。
 
 ## 三、后端工具模块 backend/tools/
@@ -2055,8 +2055,8 @@ flowchart TD
 | `__initWidget` | 27-44 | 建滚动容器、`ExpandLayout`，透明背景、关横向滚动，调 `setup_ui`/`setup_layout` |
 | `setup_layout` | 46-77 | 把各卡片加入四个 `SettingCardGroup` 并加入布局，设间距/边距 |
 | `setup_ui` | 79-264 | 创建四个分组与全部设置卡片 |
-| `rec_batch_number` | 91-97 | `RangeSettingCard(config.recBatchNumber)`，每图同时识别文本框数 |
-| `max_batch_size` | 99-105 | `RangeSettingCard(config.maxBatchSize)`，DB 每 batch 图片数 / 帧预取队列容量 |
+| `rec_batch_number` | 189-195 | `RangeSettingCard(config.recBatchNumber)`，识别批大小（1-1000） |
+| `max_batch_size` | 197-203 | `RangeSettingCard(config.maxBatchSize)`，帧预取队列容量（1-1000） |
 | `save_directory` | 179-186 | `PushSettingCard`，clicked→`choose_save_directory` |
 | `check_update_on_startup` | 188-194 | `SwitchSettingCard(config.checkUpdateOnStartup)` |
 | `video_sub_finder_*` | 196-211 | CPU 核心数、解码组件（枚举 `VideoSubFinderDecoder`） |

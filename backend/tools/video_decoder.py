@@ -753,6 +753,64 @@ def open_capture(video_path, frame_count=0, fps=0):
     return _open_cv2(video_path), 'sw'
 
 
+# 预览 D3D11 挂起标记：{video_path: True}。某些视频会在 seek 时触发 DXGI
+# 设备移除导致 cv2 在 C++ 层无限阻塞（无法中断），该视频此后直接走软解。
+_preview_hw_failed = {}
+
+
+def open_preview_capture(video_path):
+    """预览专用打开：默认 D3D11 硬解，失败自动回退软解。返回 (cap, decoder_id)。
+
+    与提取用的 open_capture 完全解耦：
+    - 不做 auto 基准测试（预览要的是低延迟随机 seek，不是顺序吞吐）；
+    - 不用 QSV/NVDEC（ffmpeg 管道不支持随机 seek，拖动预览会从头解码）；
+    - D3D11 打开带超时首帧预检，预检失败/超时/该视频曾挂起 → 软解。
+    硬件加速总开关关闭时直接软解。
+    """
+    path = str(video_path)
+    hw_enabled = True
+    try:
+        from backend.config import config
+        hw_enabled = bool(config.hardwareAcceleration.value)
+    except Exception:
+        pass
+    if hw_enabled and path not in _preview_hw_failed:
+        # 按 DXGI 顺序尝试各适配器（独显优先，与启动探测一致）
+        try:
+            adapters = _dxgi_adapters()
+        except Exception:
+            adapters = []
+        for ad in adapters:
+            did = f"d3d11:{ad['index']}"
+            holder = {}
+
+            def _preflight():
+                cap = _open_any(path, did)
+                holder['cap'] = cap
+                if not cap.isOpened():
+                    return None
+                ok, frame = cap.read()
+                if not ok:
+                    return None
+                return frame
+
+            done, frame = _run_with_timeout(_preflight, 12)
+            cap = holder.get('cap')
+            if done and frame is not None and cap is not None:
+                return _PrefetchedCapture(cap, frame), did
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+    return _open_cv2(path), 'sw'
+
+
+def mark_preview_hw_failed(video_path):
+    """标记该视频的 D3D11 预览已挂起/失败，后续预览直接软解。"""
+    _preview_hw_failed[str(video_path)] = True
+
+
 def describe(decoder_id):
     """返回解码方式描述（供日志展示）。"""
     if not decoder_id or decoder_id == 'sw':

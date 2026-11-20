@@ -307,7 +307,8 @@ class AdvancedSettingInterface(ScrollArea):
             texts=[item.value for item in VideoSubFinderDecoder],
             parent=self.video_sub_finder_group
         )
-        # 视频硬件解码（OpenCV 读帧路径：预览/抽帧/OCR帧读取）
+        # 视频硬件解码（OpenCV 读帧路径：抽帧/OCR帧读取；主界面预览已解耦，
+        # 固定走 D3D11 优先+软解回退的独立通道，不受本配置影响）
         # 选项 = 自动 + 软件解码 + 启动时探测到的各硬解器（D3D11/QSV/NVDEC）。
         # 探测在后台线程进行，完成后 _refresh_decode_options 重建下拉项；
         # 若已保存的硬解选择在本次启动中失效，validate_decoder_selection 会重置为 auto。

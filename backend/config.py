@@ -9,7 +9,7 @@ from backend.tools.video_decoder import is_valid_decoder_id
 import configparser
 
 # 项目版本号
-VERSION = "3.0.1"
+VERSION = "3.1.0"
 PROJECT_HOME_URL = "https://github.com/Catfish-Y/video-subtitle-extractor-DirectML"
 PROJECT_ISSUES_URL = PROJECT_HOME_URL + "/issues"
 PROJECT_RELEASES_URL = PROJECT_HOME_URL + "/releases"
@@ -77,10 +77,10 @@ class Config(QConfig):
     mode = OptionsConfigItem("Main", "Mode", "fast",  OptionsValidator(["fast", "accurate"]))
     # 是否生成TXT文本字幕
     generateTxt = ConfigItem("Main", "GenerateTxt", False, BoolValidator())
-    # 识别阶段每批处理的文本框数量，显存越大可设越大
-    recBatchNumber = RangeConfigItem("Main", "RecBatchNumber", 100, RangeValidator(1, 2000))
-    # OCR 帧预取队列容量
-    maxBatchSize = RangeConfigItem("Main", "MaxBatchSize", 100, RangeValidator(1, 2000))
+    # 识别阶段每批处理的文本框数量，显存越大可设越大（上限 1000）
+    recBatchNumber = RangeConfigItem("Main", "RecBatchNumber", 100, RangeValidator(1, 1000))
+    # OCR 帧预取队列容量（上限 1000）
+    maxBatchSize = RangeConfigItem("Main", "MaxBatchSize", 100, RangeValidator(1, 1000))
     # 字幕出现区域
     subtitleArea = OptionsConfigItem("Main", "SubtitleArea", SubtitleArea.UNKNOWN, OptionsValidator(SubtitleArea), EnumSerializer(SubtitleArea))
     # 每一秒抓取多少帧进行OCR识别
@@ -190,6 +190,12 @@ def _migrate_legacy_options():
         config.set(config.videoHwDecode, 'sw')
     elif raw_hw == 'on':
         config.set(config.videoHwDecode, 'auto')
+
+    # 识别批大小 / 帧预取队列容量上限由 2000 降为 1000：
+    # 旧配置中超过新上限的值收敛到 1000，避免滑块与持久化值不一致
+    for item in (config.recBatchNumber, config.maxBatchSize):
+        if item.value > item.validator.max:
+            config.set(item, item.validator.max)
 
 
 _migrate_legacy_options()

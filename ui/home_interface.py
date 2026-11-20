@@ -5,7 +5,7 @@ import multiprocessing
 import time
 import traceback
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
-from PySide6.QtCore import Slot, QRect, Signal, Qt
+from PySide6.QtCore import Slot, QRect, Signal, Qt, QTimer
 from PySide6.QtGui import QTextCharFormat, QColor
 from PySide6 import QtWidgets
 from qfluentwidgets import (PushButton, CardWidget, PlainTextEdit, FluentIcon, SmoothScrollArea)
@@ -18,30 +18,383 @@ from backend.tools.subtitle_extractor_remote_call import SubtitleExtractorRemote
 from backend.tools.process_manager import ProcessManager
 from backend.tools import video_decoder
 
+
+class _PreviewWorker:
+    """单个 capture 的专属解码线程。
+
+    cv2.VideoCapture 不是线程安全的，且 D3D11 挂起后 set/read/release 都可能
+    在 C++ 层无限阻塞，因此每个 capture 的全部操作（open/set/read/release）
+    都在它的专属线程内执行；看门狗超时时直接弃用该线程与 capture
+    （不 release，避免阻塞），由调度器重建软解 worker。
+    seek 请求只保留最新一条（拖动中间帧全部丢弃）。
+    """
+
+    _WATCHDOG_SECONDS = 8      # 单次 seek+read 超过该时长视为硬解挂起
+
+    def __init__(self, loader, kind, path, hw):
+        self._loader = loader
+        self.kind = kind               # 'user' / 'progress'
+        self._path = path
+        self._hw = hw                  # True=D3D11 优先（仅 user）；False=固定软解
+        self._queue_lock = threading.Lock()
+        self._queue_wake = threading.Event()
+        self._pending = None           # (frame_no, gen)
+        self._stopped = False
+        self._abandoned = False        # 看门狗弃用后不再操作 cap
+        self.cap = None
+        self.did = 'sw'
+        self.meta = None
+        self.first_frame = None
+        self.load_ok = False
+        self._thread = threading.Thread(
+            target=self._run, name=f'PreviewWorker-{kind}', daemon=True)
+        self._thread.start()
+
+    def _open(self):
+        """在专属线程内打开 capture 并预读首帧（带看门狗，防硬解打开挂起）。"""
+        result = {}
+
+        def _work():
+            try:
+                if self._hw:
+                    cap, did = video_decoder.open_preview_capture(self._path)
+                else:
+                    cap, did = video_decoder._open_cv2(self._path), 'sw'
+                result['cap'] = cap
+                result['did'] = did
+                if not cap.isOpened():
+                    return
+                ret, frame = cap.read()
+                if not ret:
+                    return
+                result['frame'] = frame
+                result['meta'] = {
+                    'frame_count': int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+                    'frame_width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                    'frame_height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                    'fps': cap.get(cv2.CAP_PROP_FPS),
+                }
+            except Exception:
+                pass
+            finally:
+                # 若打开耗时超过看门狗窗口、worker 已被弃用，迟到的 cap
+                # 无人消费，这里主动释放，避免 D3D11 设备/ffmpeg 进程泄漏
+                if self._abandoned and result.get('cap') is not None:
+                    try:
+                        result['cap'].release()
+                    except Exception:
+                        pass
+
+        t = threading.Thread(target=_work, daemon=True)
+        t.start()
+        t.join(self._WATCHDOG_SECONDS if self._hw else 30)
+        if t.is_alive():
+            # 打开/首帧挂起：弃用（cap 可能已创建但卡在 C++ 层，不 release）
+            with self._queue_lock:
+                self._abandoned = True
+            if self._hw:
+                video_decoder.mark_preview_hw_failed(self._path)
+            self.load_ok = False
+            return
+        self.cap = result.get('cap')
+        self.did = result.get('did', 'sw')
+        if 'meta' in result:
+            self.first_frame = result['frame']
+            self.meta = result['meta']
+            self.load_ok = True
+
+    def post(self, frame_no, gen):
+        with self._queue_lock:
+            if self._stopped or self._abandoned:
+                return
+            self._pending = (int(frame_no), gen)
+        self._queue_wake.set()
+
+    def stop(self):
+        with self._queue_lock:
+            self._stopped = True
+            self._pending = None
+        self._queue_wake.set()
+
+    def join(self, timeout=None):
+        self._thread.join(timeout)
+
+    def _run(self):
+        self._open()
+        self._loader._on_worker_opened(self)
+        if self._abandoned:
+            return  # 打开即挂起被弃用：不进入循环，cap 不 release
+        while True:
+            self._queue_wake.wait()
+            self._queue_wake.clear()
+            with self._queue_lock:
+                if self._stopped or self._abandoned:
+                    break
+                req = self._pending
+                self._pending = None
+            if req is None or not self.load_ok:
+                continue
+            frame_no, gen = req
+            self._seek_and_emit(frame_no, gen)
+        with self._queue_lock:
+            abandoned = self._abandoned
+        if not abandoned and self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+
+    def _seek_and_emit(self, frame_no, gen):
+        result = {}
+
+        def _work():
+            try:
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+                ret, frame = self.cap.read()
+                result['ok'] = ret
+                result['frame'] = frame
+            except Exception:
+                result['ok'] = False
+
+        worker = threading.Thread(target=_work, daemon=True)
+        worker.start()
+        if self.did != 'sw':
+            worker.join(self._WATCHDOG_SECONDS)
+            if worker.is_alive():
+                # D3D11 挂起（DXGI 设备移除后 cv2 无限阻塞）：弃用本 worker
+                # （cap 不 release，操作线程留在 C++ 层），标记该视频，
+                # 由调度器重建软解 worker 并重试本次请求。
+                with self._queue_lock:
+                    self._abandoned = True
+                video_decoder.mark_preview_hw_failed(self._path)
+                self._loader._on_worker_hung(self, frame_no, gen)
+                return
+        else:
+            worker.join()
+        if not result.get('ok'):
+            return
+        if self._loader._is_stale(gen):
+            return
+        with self._queue_lock:
+            superseded = self._pending is not None
+        if superseded and self.kind == 'user':
+            return  # 已有更新的拖动请求，丢弃过期帧
+        self._loader._emit_frame(frame_no, result['frame'])
+
+
+class PreviewLoader:
+    """预览解码调度器：UI 线程只投递请求，解码全部在后台线程完成。
+
+    双 worker 设计（各自独占一个 capture，互不干扰 seek 位置）：
+    - user worker：D3D11 硬解优先、失败回退软解（open_preview_capture），
+      服务拖动进度条 / 快捷键 / 打开文件等交互预览；
+    - progress worker：固定软解，服务提取中的进度回写预览（真随机 seek，
+      顺序递增读帧极快，不会像 QSV/NVDEC 那样从头解码）。
+
+    请求合并：每个队列只保留最新请求（拖动中间帧全部丢弃）；
+    交互请求 40ms 防抖。D3D11 seek 挂起由看门狗兜底：超时弃用硬解、
+    标记该视频、重建软解 worker 重试。
+    回调（on_frame/on_loaded/on_load_failed）由 HomeInterface 通过 Qt
+    信号排队到主线程执行，后台线程不直接触碰任何 widget。
+    """
+
+    _DEBOUNCE_MS = 40          # 交互请求防抖窗口
+
+    def __init__(self, on_frame, on_loaded, on_load_failed):
+        self._on_frame = on_frame              # callable(frame_no, frame)
+        self._on_loaded = on_loaded            # callable(gen, meta, first_frame)
+        self._on_load_failed = on_load_failed  # callable(gen, path)
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._path = None
+        self._user_worker = None
+        self._progress_worker = None
+        self._stop = False
+        self._load_waiters = {}                # {gen: (Event, holder)}
+        self._debounce_timer = None            # threading.Timer 防抖
+
+    # ---- 调用接口（UI 线程 / 提取工作线程） ----
+
+    def load(self, video_path):
+        """异步加载新视频，返回代数 gen。旧 worker 停止并自行释放。"""
+        with self._lock:
+            self._generation += 1
+            gen = self._generation
+            self._path = str(video_path)
+            self._stop_workers_locked()
+            self._spawn_workers_locked()
+        return gen
+
+    def load_sync(self, video_path, timeout=30):
+        """同步加载（提取工作线程用）：阻塞等待 user worker 打开完成。
+
+        返回 (ok, meta, gen)。加载完成后照常触发 on_loaded 刷新预览。
+        """
+        done = threading.Event()
+        holder = {}
+        with self._lock:
+            self._generation += 1
+            gen = self._generation
+            self._path = str(video_path)
+            self._stop_workers_locked()
+            self._spawn_workers_locked()
+            self._load_waiters[gen] = (done, holder)
+        if not done.wait(timeout):
+            with self._lock:
+                self._load_waiters.pop(gen, None)
+            return False, None, gen
+        return holder.get('ok', False), holder.get('meta'), gen
+
+    def request(self, frame_no, kind='user'):
+        """投递 seek 请求。kind='user' 交互 / 'progress' 进度回写。"""
+        with self._lock:
+            if self._stop or self._user_worker is None:
+                return
+            worker = self._progress_worker if kind == 'progress' else self._user_worker
+            gen = self._generation
+            if kind == 'user':
+                # 防抖：窗口内的连续拖动只保留最后一次（Timer 重置）
+                if self._debounce_timer is not None:
+                    self._debounce_timer.cancel()
+                self._debounce_timer = threading.Timer(
+                    self._DEBOUNCE_MS / 1000.0,
+                    self._post_user, args=(frame_no, gen))
+                self._debounce_timer.daemon = True
+                self._debounce_timer.start()
+                return
+        if worker is not None:
+            worker.post(frame_no, gen)
+
+    def _post_user(self, frame_no, gen):
+        with self._lock:
+            self._debounce_timer = None
+            worker = self._user_worker
+            current_gen = self._generation
+            stopped = self._stop
+        if worker is not None and current_gen == gen and not stopped:
+            worker.post(frame_no, gen)
+
+    def shutdown(self):
+        with self._lock:
+            self._stop = True
+            if self._debounce_timer is not None:
+                self._debounce_timer.cancel()
+                self._debounce_timer = None
+            workers = [w for w in (self._user_worker, self._progress_worker) if w is not None]
+            self._stop_workers_locked()
+        # 等待 worker 退出（正常情况 <100ms；被弃用的硬解 worker 不阻塞退出）
+        for w in workers:
+            w.join(timeout=2)
+
+    # ---- 内部 ----
+
+    def _spawn_workers_locked(self):
+        self._user_worker = _PreviewWorker(self, 'user', self._path, hw=True)
+        self._progress_worker = _PreviewWorker(self, 'progress', self._path, hw=False)
+
+    def _stop_workers_locked(self):
+        for w in (self._user_worker, self._progress_worker):
+            if w is not None:
+                w.stop()
+        self._user_worker = None
+        self._progress_worker = None
+
+    def _is_stale(self, gen):
+        with self._lock:
+            return self._stop or gen != self._generation
+
+    def _on_worker_opened(self, worker):
+        """worker 打开完成回调（worker 线程）。user worker 决定加载结果。
+
+        D3D11 打开失败/挂起时自动重建为软解 worker 重试一次；
+        软解仍失败才向 UI 报告加载失败。
+        """
+        if worker.kind != 'user':
+            return
+        rebuild = False
+        with self._lock:
+            gen = self._generation
+            stale = self._stop or worker is not self._user_worker
+            path = self._path
+            if not stale and not worker.load_ok and worker._hw:
+                # 硬解失败 → 重建软解 worker（标记避免再次尝试硬解）
+                video_decoder.mark_preview_hw_failed(path)
+                self._user_worker = _PreviewWorker(self, 'user', path, hw=False)
+                rebuild = True
+            waiter = self._load_waiters.get(gen) if not stale and not rebuild else None
+            if waiter is not None and not rebuild:
+                self._load_waiters.pop(gen, None)
+        if stale:
+            return
+        if rebuild:
+            return  # 新软解 worker 打开后会再次回调本方法
+        if waiter is not None:
+            done, holder = waiter
+            holder['ok'] = worker.load_ok
+            holder['meta'] = worker.meta
+            done.set()
+        if worker.load_ok:
+            self._on_loaded(gen, worker.meta, worker.first_frame)
+        else:
+            self._on_load_failed(gen, path)
+
+    def _on_worker_hung(self, worker, frame_no, gen):
+        """D3D11 挂起：重建 user worker 为软解并重试本次请求。"""
+        with self._lock:
+            if self._stop or gen != self._generation or worker is not self._user_worker:
+                return
+            self._user_worker = _PreviewWorker(self, 'user', self._path, hw=False)
+            new_worker = self._user_worker
+        if frame_no is not None:
+            new_worker.post(frame_no, gen)
+
+    def _emit_frame(self, frame_no, frame):
+        if frame is not None:
+            self._on_frame(frame_no, frame)
+
+
 class HomeInterface(QWidget):
-    progress_signal = Signal(int, int, int, bool, int) 
+    progress_signal = Signal(int, int, int, bool, int)
     append_log_signal = Signal(list)
     task_error_signal = Signal(object)
+    # 预览后台线程 → 主线程的排队信号（后台线程不直接触碰 widget）
+    preview_frame_signal = Signal(int, object)
+    video_loaded_signal = Signal(int, object, object)
+    video_load_failed_signal = Signal(int, str)
+
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setObjectName("HomeInterface")
         # 初始化一些变量
         self.video_path = None
-        self.video_cap = None
         self.fps = None
         self.frame_count = None
         self.frame_width = None
         self.frame_height = None
         self.se = None  # 后台字幕提取器
+        self._preview_gen = -1          # 当前预览对应的加载代数
+        self._slider_resetting = False  # 程序重置滑块时不触发预览请求
 
         # 添加自动滚动控制标志
         self.auto_scroll = True
         self.running_task = False
         self.running_process = None
         self.running_sub_process_pids = []
-        
+
         # 当前正在处理的任务索引
         self.current_processing_task_index = -1
+
+        # 预览解码后台线程（D3D11 优先/软解回退 + 进度专用软解）
+        self.preview_loader = PreviewLoader(
+            on_frame=lambda frame_no, frame: self.preview_frame_signal.emit(frame_no, frame),
+            on_loaded=lambda gen, meta, first: self.video_loaded_signal.emit(gen, meta, first),
+            on_load_failed=lambda gen, path: self.video_load_failed_signal.emit(gen, path),
+        )
+        self.preview_frame_signal.connect(self._on_preview_frame)
+        self.video_loaded_signal.connect(self._on_video_loaded)
+        self.video_load_failed_signal.connect(self._on_video_load_failed)
+        # 进度回写节流：提取中最多 5fps 触发预览解码，避免无谓的密集 seek
+        self._last_progress_preview = 0.0
 
         self.__init_widgets()
         self.progress_signal.connect(self.update_progress)
@@ -162,13 +515,55 @@ class HomeInterface(QWidget):
 
     
     def slider_changed(self, value):
-        if self.video_cap is not None and self.video_cap.isOpened():
-            frame_no = self.video_slider.value()
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-            ret, frame = self.video_cap.read()
-            if ret:
-                # 更新预览图像
-                self.update_preview(frame)
+        """滑块变化 → 只投递请求，解码在后台线程完成（不阻塞 UI）。
+
+        提取进行中的进度回写也走这里，但改用进度专用软解 capture，
+        避免与用户拖动互相干扰 seek 位置，也避免硬解管道从头解码。
+        """
+        if self._slider_resetting:
+            return
+        kind = 'progress' if self.running_task else 'user'
+        if kind == 'progress':
+            now = time.monotonic()
+            if now - self._last_progress_preview < 0.2:
+                return
+            self._last_progress_preview = now
+        self.preview_loader.request(value, kind)
+
+    @Slot(int, object)
+    def _on_preview_frame(self, frame_no, frame):
+        """后台解码完成回调（主线程）：帧号与滑块当前值一致才显示。"""
+        if frame is None:
+            return
+        if frame_no != self.video_slider.value():
+            return
+        self.update_preview(frame)
+
+    @Slot(int, object, object)
+    def _on_video_loaded(self, gen, meta, first_frame):
+        """视频加载完成回调（主线程）：设置元数据并显示首帧。"""
+        if gen != self._preview_gen or meta is None:
+            return
+        self.frame_count = meta['frame_count']
+        self.frame_width = meta['frame_width']
+        self.frame_height = meta['frame_height']
+        self.fps = meta['fps']
+        self._slider_resetting = True
+        try:
+            self.video_slider.setMaximum(max(1, self.frame_count))
+            self.video_slider.setValue(1)
+        finally:
+            self._slider_resetting = False
+        self.video_display_component.set_dragger_enabled(True)
+        if first_frame is not None:
+            self.update_preview(first_frame)
+
+    @Slot(int, str)
+    def _on_video_load_failed(self, gen, path):
+        """视频加载失败回调（主线程）。"""
+        if gen != self._preview_gen:
+            return
+        self.append_output(f"{tr['SubtitleExtractorGUI']['OpenVideoFailed']}: {path}")
 
     def ab_sections_changed(self, ab_sections):
         get_current_task_index = self.task_list_component.get_current_task_index()
@@ -346,10 +741,18 @@ class HomeInterface(QWidget):
                             pending_task = pending_tasks[0]
                             # 更新当前处理的任务索引
                             self.current_processing_task_index, task = pending_task
-                            if not self.load_video(task.path):
+                            # 同步加载预览（后台解码线程执行，工作线程等待结果）
+                            ok, meta, gen = self.preview_loader.load_sync(task.path)
+                            self._preview_gen = gen
+                            if not ok:
                                 self.append_output(tr['SubtitleExtractorGUI']['OpenVideoFailed'].format(task.path))
                                 self.task_list_component.update_task_status(self.current_processing_task_index, TaskStatus.FAILED)
                                 continue
+                            self.video_path = task.path
+                            self.frame_count = meta['frame_count']
+                            self.frame_width = meta['frame_width']
+                            self.frame_height = meta['frame_height']
+                            self.fps = meta['fps']
                             
                             # 获取字幕区域坐标
                             subtitle_areas = self.apply_task_selection(self.current_processing_task_index)
@@ -398,9 +801,8 @@ class HomeInterface(QWidget):
                             # 单个任务失败不应终止整个批量队列，标记失败后继续处理下一个
                             continue
                         finally:
-                            if self.video_cap:
-                                self.video_cap.release()
-                                self.video_cap = None
+                            # 预览 capture 由 PreviewLoader 统一管理，
+                            # 下一个任务 load_sync 时自动释放旧的
                             time.sleep(1)
                 finally:
                     self.running_task = False
@@ -493,17 +895,22 @@ class HomeInterface(QWidget):
         self.run_button.setVisible(True)
         self.stop_button.setVisible(False)
         self.se = None
-        # 重置视频滑块
-        self.video_slider.setValue(1)
+        # 重置视频滑块（程序重置不触发预览请求）
+        self._slider_resetting = True
+        try:
+            self.video_slider.setValue(1)
+        finally:
+            self._slider_resetting = False
         # 重置当前处理任务索引
         self.current_processing_task_index = -1
 
     @Slot(int, bool)
     def update_progress(self, progress_remover, progress_finder, progress_total, isFinished, progress_post=0):
         try:
-            pos = min(self.frame_count - 1, int(progress_remover / 100 * self.frame_count))
-            if pos != self.video_slider.value():
-                self.video_slider.setValue(pos)
+            if self.frame_count:
+                pos = min(self.frame_count - 1, int(progress_remover / 100 * self.frame_count))
+                if pos != self.video_slider.value():
+                    self.video_slider.setValue(pos)
 
             # 更新任务进度（加权：帧提取5% + OCR 90% + 后处理5%）
             if self.current_processing_task_index >= 0:
@@ -571,31 +978,12 @@ class HomeInterface(QWidget):
             self.task_list_component.update_task_status(self.current_processing_task_index, TaskStatus.FAILED)
 
     def load_video(self, video_path):
-        self.video_path = video_path
-        if self.video_cap:
-            self.video_cap.release()
-            self.video_cap = None
-        self.video_cap, _ = video_decoder.open_capture(self.video_path)
-        if not self.video_cap.isOpened():
-            return False
-        ret, frame = self.video_cap.read()
-        if not ret:
-            return False
-        self.frame_count = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.frame_height = int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.frame_width = int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.fps = self.video_cap.get(cv2.CAP_PROP_FPS)
-        
-        self.update_preview(frame)
-        self.video_slider.setMaximum(self.frame_count)
-        self.video_slider.setValue(1)
-        self.video_display_component.set_dragger_enabled(True)
-        return True
-        self.video_slider.setMaximum(self.frame_count)
-        self.video_slider.setValue(1)
-        self.video_display_component.set_dragger_enabled(True)
-        return True
+        """异步加载视频预览（D3D11 优先/软解回退，后台线程解码）。
 
+        元数据与首帧通过 video_loaded_signal 回调设置，不阻塞 UI。
+        """
+        self.video_path = video_path
+        self._preview_gen = self.preview_loader.load(video_path)
 
     def open_file(self):
         files, _ = QtWidgets.QFileDialog.getOpenFileNames(
@@ -605,21 +993,23 @@ class HomeInterface(QWidget):
             "All Files (*.*);;MP4 Files (*.mp4);;FLV Files (*.flv);;WMV Files (*.wmv);;AVI Files (*.avi)"
         )
         if files:
+            # 只校验文件可读性（打开即释放），不做完整解码；
+            # 真正的预览加载只对第一个文件做一次（select_task 触发）。
             files_loaded = []
-            # 倒序打开, 确保第一个视频截图显示在屏幕上
-            for path in reversed(files):
-                if self.load_video(path):
+            for path in files:
+                cap = cv2.VideoCapture(path)
+                if cap.isOpened():
+                    cap.release()
                     self.append_output(f"{tr['SubtitleExtractorGUI']['OpenVideoSuccess']}: {path}")
                     files_loaded.append(path)
                 else:
                     self.append_output(f"{tr['SubtitleExtractorGUI']['OpenVideoFailed']}: {path}")
             # 正序添加, 确保任务列表顺序一致
-            for path in reversed(files_loaded):
-                # 添加到任务列表
+            for path in files_loaded:
                 self.task_list_component.add_task(path)
             if not files_loaded:
                 return
-            index = max(0, self.task_list_component.find_task_index_by_path(path))
+            index = max(0, self.task_list_component.find_task_index_by_path(files_loaded[0]))
             self.task_list_component.select_task(index)
 
     def closeEvent(self, event):
@@ -632,11 +1022,9 @@ class HomeInterface(QWidget):
             self.video_display_component.video_slider.valueChanged.disconnect(self.slider_changed)
             self.video_display_component.ab_sections_changed.disconnect(self.ab_sections_changed)
             self.video_display_component.selections_changed.disconnect(self.selections_changed)
-            # 释放视频资源
-            if self.video_cap:
-                self.video_cap.release()
-                self.video_cap = None
-                
+            # 停止预览解码线程并释放 capture
+            self.preview_loader.shutdown()
+
             # 确保所有子进程都已终止
             ProcessManager.instance().terminate_all()
         except Exception as e:
